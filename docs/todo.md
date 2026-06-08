@@ -21,8 +21,9 @@
 - Gamma base: `https://gamma-api.polymarket.com` · endpoints `/events`, `/markets`, `/tags`, `/sports`.
 - Discovery path: `GET /events?slug=btc-updown-5m-<ts>` → event → its `markets[]` → outcome token IDs.
 - Filter params available: `slug`, `tag_id`, `related_tags`, `exclude_tag_id`, `active`, `closed`, `order`, `ascending`, `limit`, `offset`.
-- [!] **To verify in Phase 1 (field names):** exact JSON fields for the two outcome token IDs (`clobTokenIds`), `outcomes` ordering (which index = "Up" vs "Down"), `conditionId`, and per-market `tickSize`/`minimum_order_size`.
-- [!] **To verify:** resolution source. Search/market-rules indicate **Chainlink BTC/USD** (price at window end ≥ price at window start ⇒ "Up"). Confirm exact source + timing on the live market page.
+- [x] **CONFIRMED (live probe):** market fields = `conditionId`, `clobTokenIds` (JSON-encoded string array), `outcomes` = `["Up","Down"]` (mapped by label, not index), `orderPriceMinTickSize` (0.01), `orderMinSize` (5). Exactly one market per event.
+- [x] **CONFIRMED:** event/market carry a `resolutionSource` field; rules resolve via **Chainlink BTC/USD** (window end ≥ start ⇒ Up). Resolution is automatic on Polymarket; the bot reads it only for PnL.
+- [x] **GOTCHA CONFIRMED:** Gamma `bestBid`/`bestAsk` can be STALE — trust CLOB `/book` / `/price` / `/midpoint` for live quotes. `/book` lists aren't reliably sorted, so the client sorts them (bids high→low, asks low→high).
 
 ### 1.2 Polymarket — orders (CLOB API, via `py-clob-client`)
 - Flow: `create_order(OrderArgs)` → signed order → `post_order(signed, OrderType)`.
@@ -74,16 +75,18 @@
 - [x] Create folders + interface-stub module files (all 13 `bot/` modules import cleanly on Python 3.13).
 - [x] Implement `config.py`, `logging_setup.py`, `market_clock.py` (window math), `models.py`, `.env.example`, `requirements.txt`, `.gitignore`.
 - [x] `main.py` offline self-check runs (prints deterministic current/next slug; no network; DRY_RUN).
-- [ ] Verify Gamma field names + resolution source on a live market (§1.1 [!]) — deferred to Phase 2.
+- [x] Verify Gamma field names + resolution source on a live market — DONE via `scripts/probe_market.py` (see §1.1 CONFIRMED).
 
-## 5. Phase 2 — API clients (DRY_RUN-safe)
-- [ ] `BinanceClient.get_recent_klines_5m(limit)` → list of OHLCV dataclasses; retry/backoff.
-- [ ] `PolymarketClient`:
-  - [ ] `get_current_btc_5m_market()` → `{condition_id, up_token_id, down_token_id, tick_size, window_start, window_end}` via deterministic slug + Gamma.
-  - [ ] `get_orderbook(token_id)` / `get_price(token_id)` / `get_spread(token_id)`.
-  - [ ] auth/signing wiring (L1 sign + L2 derive) — exercised only in LIVE.
-  - [ ] `place_limit_order_maker(token_id, side, price, size, dry_run)` — logs request in DRY_RUN.
-  - [ ] `cancel_order(order_id, dry_run)`, `get_positions()`.
+## 5. Phase 2 — API clients (DRY_RUN-safe)  ✅ done (LIVE auth deferred to Phase 5)
+- [x] `bot/net.py`: stdlib (urllib) GET+JSON helper with retry/backoff (keeps Phases 2–4 dependency-free).
+- [x] `BinanceClient.get_recent_klines_5m(limit, closed_only)` → list of `Kline`; drops in-progress candle.
+- [x] `PolymarketClient`:
+  - [x] `get_current_btc_5m_market()` / `get_market_by_slug()` → `MarketRef` (condition_id, up/down token ids by label, tick_size, min_order_size, neg_risk, window bounds) via deterministic slug + Gamma.
+  - [x] `get_orderbook(token_id)` (self-sorted, best-first) / `get_price(token_id, side)` / `get_midpoint(token_id)`.
+  - [ ] auth/signing wiring (L1 sign + L2 derive via py-clob-client) — **deferred to Phase 5 (LIVE only)**.
+  - [x] `place_limit_order_maker(order, dry_run)` — logs the fully-formed maker request in DRY_RUN.
+  - [x] `cancel_order(order_id, dry_run)` (DRY_RUN logs); `get_positions()` — **deferred to Phase 5**.
+- [x] `scripts/probe_market.py` + `scripts/smoke_clients.py` (read-only/DRY_RUN) — both run green.
 
 ## 6. Phase 3 — Strategy, positions, orders
 - [ ] `signal_engine.pick_direction(candles) -> UP | DOWN | NO_TRADE` (pluggable; default = short‑term momentum, params in config).
