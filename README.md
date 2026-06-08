@@ -64,6 +64,21 @@ python scripts/smoke_clients.py  # klines + discovery + book + one DRY_RUN order
 
 (`data/` and `logs/` contents are gitignored.)
 
+## Pull data from a VPS run
+
+If you run the bot on a server, pull its results to your machine with an instant
+P&L summary. Run from your **local** PowerShell (not inside SSH):
+
+```powershell
+.\scripts\pull_vps_data.ps1
+# override defaults if needed:
+.\scripts\pull_vps_data.ps1 -Server root@1.2.3.4 -RemotePath /home/claude/lol -Dest .\vps_data
+```
+
+It copies `trades/positions/pnl.csv + state.json + bot.log` into `.\vps_data\`
+(separate from your local `data\`) and prints markets / wins / losses / total P&L.
+Raw equivalent: `scp -r root@HOST:/home/claude/lol/data .\vps_data`.
+
 ## Optional: virtualenv + .env
 ```powershell
 python -m venv .venv; .\.venv\Scripts\Activate.ps1

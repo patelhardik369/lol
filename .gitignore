@@ -19,6 +19,9 @@ data/*
 logs/*
 !logs/.gitkeep
 
+# data pulled from a VPS run (scripts/pull_vps_data.ps1)
+vps_data/
+
 # os / editor
 .DS_Store
 Thumbs.db
