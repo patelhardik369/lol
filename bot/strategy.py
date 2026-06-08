@@ -1,27 +1,25 @@
 """Core BTC 5-minute lifecycle strategy (buy-only construction).
 
-Per the STEP-2 spec + clarifications (2026-06-08):
+Faithful to the STEP-2 spec (§4-§7) with the user's clarifications. Per tick, the
+first matching rule fires (one maker action/tick); the runner executes it, updates
+the position, and re-evaluates next tick.
 
-  ENTRY (pure signal)   take the SIGNAL side at window open, ANY price. One entry
-                        per window.
-  PROFIT-LOCK (primary, §5)   the moment buying the *cheaper* outcome makes
-                        min(up,down) shares > cost, buy exactly that and let it
-                        lock -> a guaranteed-positive payoff either way, market
-                        marked DONE. This is the profit engine.
-  FAVORITE (§6, fallback)   only when a lock is NOT achievable and the entry side
-                        is a heavy favorite (>= favorite_threshold) with shares
-                        <= cost: top it up until shares > cost.
-  INSURANCE (§7)        entry side almost dead (<= insurance_threshold) and we
-                        hold fewer of it than the opposite -> buy it to EQUALIZE.
-  SMART HEDGE           we do NOT add a guaranteed-loss leg. The opposite side is
-                        bought only when it LOCKS profit (the profit-lock). The
-                        literal ~0.52 adverse hedge is OFF by default
-                        (config.enable_loss_hedge) because it raises cost and
-                        blocks the lock.
+  ENTRY (pure signal)   take the SIGNAL side at window open, any price.
+  1. PROFIT-LOCK (§5)   if buying the cheaper outcome makes min(up,down) shares >
+                        cost, buy it -> guaranteed-positive payoff, market DONE.
+  2. HEDGE / STOP-LOSS (§4)   the entry went against us: the OPPOSITE-of-entry rose
+                        to >= hedge_opposite_price (~0.52) -> buy it once to start
+                        the backup (config.enable_loss_hedge, default ON).
+  3. FAVORITE (§6)      whichever side is the market FAVORITE (>= favorite_threshold,
+                        ~0.80) -> top it up until a win on that side profits at
+                        least favorite_min_profit_usd (recovers a wrong entry).
+  4. INSURANCE (§7)     whichever side is almost dead (<= insurance_threshold,
+                        ~0.10) and we hold fewer of it than the other -> buy it to
+                        EQUALIZE both sides.
 
-Everything keys off a favorite-side variable (the entry side), so the logic is
-symmetric whether we first bet UP or DOWN. One maker action per tick; the runner
-executes it, updates the position, and re-evaluates next tick.
+Favorite/insurance act on the *market* side (by price), not a hard-coded UP — so
+they fire whether the favorite is our entry side or the opposite (the recovery
+case). Hedge uses the entry side to know which way is "adverse".
 """
 
 from __future__ import annotations
@@ -41,9 +39,8 @@ def lock_buy(pos: Position, up_price: float, down_price: float, min_size: float,
              margin: float) -> Optional[Tuple[Direction, float, float]]:
     """If buying the deficit (fewer-shares) outcome can make
     ``min(up,down) shares > cost + margin``, return (side, shares, price); else
-    None. Buying past equalization only raises cost, so we never buy a side that
-    already has >= the other side's shares.
-    """
+    None. We never buy a side that already has >= the other's shares (buying past
+    equalization only raises cost)."""
     best: Optional[Tuple[Direction, float, float, float]] = None
     for side, price, shares, other in (
         (Direction.UP, up_price, pos.up_shares, pos.down_shares),
@@ -51,10 +48,9 @@ def lock_buy(pos: Position, up_price: float, down_price: float, min_size: float,
     ):
         if price <= 0 or price >= 1 or other <= shares:
             continue
-        # smallest whole Δ with (shares+Δ) > cost + Δ*price, capped at equalize.
         need = (pos.total_cost + margin - shares) / (1.0 - price)
         d = max(math.ceil(need + 1e-9), int(math.ceil(min_size)))
-        if shares + d > other:           # can't lock within the equalize range
+        if shares + d > other:
             continue
         new_min = min(shares + d, other)
         new_cost = pos.total_cost + d * price
@@ -100,11 +96,9 @@ class Strategy:
         if entry is None:
             return []
         opp = entry.opposite
-        p_entry, p_opp = price[entry], price[opp]
-        entry_sh, opp_sh = position.shares(entry), position.shares(opp)
         cost = position.total_cost
 
-        # PROFIT-LOCK (primary) -----------------------------------------------
+        # 1. PROFIT-LOCK (favorable) ------------------------------------------
         lock = lock_buy(position, up_price, down_price, market.min_order_size,
                         cfg.lock_margin_usd)
         if lock is not None:
@@ -113,31 +107,52 @@ class Strategy:
                       side.value, shares, p, cost)
             return [self._buy(market, side, shares, p, "lock")]
 
-        # FAVORITE (fallback: lock not achievable, entry side heavy favorite) --
-        if p_entry >= cfg.favorite_threshold and entry_sh <= cost + cfg.favorite_margin_usd:
-            denom = max(1e-6, 1.0 - p_entry)
-            need = (cost + cfg.favorite_margin_usd - entry_sh) / denom
-            d = max(math.ceil(need + 1e-9), market.min_order_size)
-            log.debug("FAVORITE %s @ %.3f: shares %.0f <= cost $%.2f -> buy %.0f",
-                      entry.value, p_entry, entry_sh, cost, d)
-            return [self._buy(market, entry, d, p_entry, "favorite")]
-
-        # INSURANCE (entry side almost dead, hold less than opposite) ----------
-        if p_entry <= cfg.insurance_threshold and entry_sh < opp_sh:
-            d = max(opp_sh - entry_sh, market.min_order_size)
-            log.debug("INSURANCE %s @ %.3f: %.0f < opp %.0f -> equalize buy %.0f",
-                      entry.value, p_entry, entry_sh, opp_sh, d)
-            return [self._buy(market, entry, d, p_entry, "insurance")]
-
-        # OPTIONAL literal-spec adverse loss-hedge (OFF by default) -----------
+        # 2. HEDGE / STOP-LOSS (adverse): opposite-of-entry rose -> buy it once
         if (cfg.enable_loss_hedge and not position.hedged
-                and p_opp >= cfg.hedge_opposite_price - cfg.price_tolerance):
-            size = floor_shares(cfg.base_notional_usd, p_opp, market.min_order_size,
-                                cfg.min_notional_usd)
-            log.debug("HEDGE: opp %s @ %.3f -> buy %.0f", opp.value, p_opp, size)
-            return [self._buy(market, opp, size, p_opp, "hedge")]
+                and price[opp] >= cfg.hedge_opposite_price - cfg.price_tolerance):
+            size = floor_shares(cfg.base_notional_usd, price[opp],
+                                market.min_order_size, cfg.min_notional_usd)
+            log.debug("HEDGE: opp %s @ %.3f -> buy %.0f", opp.value, price[opp], size)
+            return [self._buy(market, opp, size, price[opp], "hedge")]
+
+        # 3. FAVORITE: market favorite (>= threshold) -> ensure a win there profits
+        fav = self._side_at_or_above(price, cfg.favorite_threshold)
+        if fav is not None:
+            p_fav, fav_sh = price[fav], position.shares(fav)
+            if (fav_sh - cost) < cfg.favorite_min_profit_usd:
+                need = (cfg.favorite_min_profit_usd + cost - fav_sh) / max(1e-6, 1.0 - p_fav)
+                d = max(math.ceil(need + 1e-9), market.min_order_size)
+                log.debug("FAVORITE %s @ %.3f: profit-if-win %.2f < %.2f -> buy %.0f",
+                          fav.value, p_fav, fav_sh - cost, cfg.favorite_min_profit_usd, d)
+                return [self._buy(market, fav, d, p_fav, "favorite")]
+
+        # 4. INSURANCE: dying side (<= threshold), we hold fewer -> equalize ---
+        weak = self._side_at_or_below(price, cfg.insurance_threshold)
+        if weak is not None:
+            weak_sh, other_sh = position.shares(weak), position.shares(weak.opposite)
+            if weak_sh < other_sh:
+                d = max(other_sh - weak_sh, market.min_order_size)
+                log.debug("INSURANCE %s @ %.3f: %.0f < %.0f -> equalize buy %.0f",
+                          weak.value, price[weak], weak_sh, other_sh, d)
+                return [self._buy(market, weak, d, price[weak], "insurance")]
 
         return []  # hold
+
+    @staticmethod
+    def _side_at_or_above(price: Dict[Direction, float], thr: float) -> Optional[Direction]:
+        if price[Direction.UP] >= thr:
+            return Direction.UP
+        if price[Direction.DOWN] >= thr:
+            return Direction.DOWN
+        return None
+
+    @staticmethod
+    def _side_at_or_below(price: Dict[Direction, float], thr: float) -> Optional[Direction]:
+        if price[Direction.UP] <= thr:
+            return Direction.UP
+        if price[Direction.DOWN] <= thr:
+            return Direction.DOWN
+        return None
 
     def _buy(self, market: MarketRef, direction: Direction, size: float,
              ref_price: float, reason: str) -> OrderRequest:

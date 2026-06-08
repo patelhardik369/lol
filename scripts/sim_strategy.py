@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""scripts/sim_strategy.py - offline, deterministic strategy validation.
+"""scripts/sim_strategy.py - offline strategy validation (no network).
 
-Drives the REAL Strategy / OrderManager / PositionManager through a scripted price
-path (no network, DRY_RUN optimistic fills) showing the PROFIT-LOCK flow, then runs
-targeted checks of lock / favorite / insurance. Run: python scripts/sim_strategy.py
+Drives the REAL Strategy / OrderManager / PositionManager through scripted price
+paths showing BOTH a favorable lock and an adverse recovery (entry -> hedge ->
+favorite), then runs targeted lock / hedge / favorite / insurance checks.
+Run: python scripts/sim_strategy.py
 """
 
 from __future__ import annotations
@@ -37,54 +38,72 @@ def tags(orders):
     return [(o.reason_tag, o.direction.value, o.size) for o in orders]
 
 
-def main() -> int:
-    cfg = Config.from_env()
-    log = setup_logging(cfg.log_level, cfg.logs_dir)
+def run_path(cfg, log, label, signal, path):
     poly = PolymarketClient(cfg)
     om = OrderManager(cfg, poly)
     pm = PositionManager(cfg)
     strat = Strategy(cfg)
-
-    log.info("=========  PATH SIM: entry -> favorable move -> LOCK & exit  =========")
-    for up, secs in [(0.55, 280), (0.66, 240)]:
+    log.info("=====  %s  =====", label)
+    for up, secs in path:
         down = round(1.0 - up, 2)
         log.info("--- UP=%.2f DOWN=%.2f  %ds left ---", up, down, secs)
         pm.check_lock(SLUG)
-        for order in strat.decide(MARKET, pm.get(SLUG), Direction.UP, up, down, secs):
+        for order in strat.decide(MARKET, pm.get(SLUG), signal, up, down, secs):
             b = book(up) if order.direction is Direction.UP else book(down)
             fill = om.execute(order, b, TICK, dry_run=True)
             if fill:
                 pm.apply_fill(SLUG, fill)
                 pm.check_lock(SLUG)
     pos = pm.get(SLUG)
-    log.info("RESULT: UP %.0f/$%.2f  DOWN %.0f/$%.2f  cost $%.2f  locked=%s",
-             pos.up_shares, pos.up_cost, pos.down_shares, pos.down_cost,
-             pos.total_cost, pos.locked)
-    log.info("  guaranteed PnL: UP wins %+.2f | DOWN wins %+.2f",
+    log.info("RESULT: UP %.0f/$%.2f DOWN %.0f/$%.2f cost $%.2f locked=%s | "
+             "PnL UP %+.2f / DOWN %+.2f", pos.up_shares, pos.up_cost,
+             pos.down_shares, pos.down_cost, pos.total_cost, pos.locked,
              pm.realized_pnl(pos, Direction.UP), pm.realized_pnl(pos, Direction.DOWN))
-    assert pos.locked, "favorable move should lock guaranteed profit"
+    return pos
+
+
+def main() -> int:
+    cfg = Config.from_env()
+    log = setup_logging(cfg.log_level, cfg.logs_dir)
+    strat = Strategy(cfg)
+
+    # Favorable: enter UP, UP rises -> buy cheap DOWN to LOCK guaranteed profit.
+    fav = run_path(cfg, log, "FAVORABLE: entry UP -> LOCK", Direction.UP,
+                   [(0.55, 280), (0.66, 240)])
+    assert fav.locked
+
+    # Adverse: enter DOWN, market goes UP -> HEDGE UP -> FAVORITE UP (the backup).
+    adv = run_path(cfg, log, "ADVERSE: entry DOWN -> HEDGE -> FAVORITE", Direction.DOWN,
+                   [(0.56, 280), (0.62, 250), (0.82, 200)])
+    assert adv.up_shares >= 10 and adv.down_shares == 5  # 5 hedge + 5 favorite on UP
 
     log.info("=========  RULE CHECKS  =========")
 
-    # LOCK: one-sided UP, opposite cheap -> buy DOWN to lock guaranteed profit.
+    # LOCK: one-sided UP, opposite cheap -> buy DOWN.
     p = Position(slug=SLUG, up_shares=5, up_cost=2.75, entry_direction=Direction.UP)
     o = strat.decide(MARKET, p, Direction.UP, 0.70, 0.30, 120)
-    log.info("LOCK check -> %s", tags(o))
+    log.info("LOCK      -> %s", tags(o))
     assert o and o[0].reason_tag == "lock" and o[0].direction is Direction.DOWN
 
-    # FAVORITE: equal sides + high cost (no lock) + entry side heavy favorite.
-    p = Position(slug=SLUG, up_shares=5, up_cost=4.20, down_shares=5, down_cost=3.80,
-                 entry_direction=Direction.UP, hedged=True)
-    o = strat.decide(MARKET, p, Direction.UP, 0.84, 0.16, 120)
-    log.info("FAVORITE check -> %s", tags(o))
+    # HEDGE: entered DOWN, opposite UP rose past 0.52, no lock yet -> buy UP.
+    p = Position(slug=SLUG, down_shares=5, down_cost=2.20, entry_direction=Direction.DOWN)
+    o = strat.decide(MARKET, p, Direction.DOWN, 0.60, 0.40, 200)
+    log.info("HEDGE     -> %s", tags(o))
+    assert o and o[0].reason_tag == "hedge" and o[0].direction is Direction.UP
+
+    # FAVORITE: market favorite UP >= 0.80, a UP win doesn't profit enough -> buy UP.
+    p = Position(slug=SLUG, up_shares=5, up_cost=3.00, down_shares=5, down_cost=2.20,
+                 entry_direction=Direction.DOWN, hedged=True)
+    o = strat.decide(MARKET, p, Direction.DOWN, 0.84, 0.16, 120)
+    log.info("FAVORITE  -> %s", tags(o))
     assert o and o[0].reason_tag == "favorite" and o[0].direction is Direction.UP
 
-    # INSURANCE: entry side dying, fewer than opposite, equalize does NOT lock.
-    p = Position(slug=SLUG, up_shares=3, up_cost=1.00, down_shares=8, down_cost=8.00,
-                 entry_direction=Direction.UP, hedged=True)
-    o = strat.decide(MARKET, p, Direction.UP, 0.08, 0.92, 60)
-    log.info("INSURANCE check -> %s", tags(o))
-    assert o and o[0].reason_tag == "insurance" and o[0].size == 5
+    # INSURANCE: DOWN almost dead, we hold fewer, and equalizing does NOT lock.
+    p = Position(slug=SLUG, up_shares=15, up_cost=13.0, down_shares=5, down_cost=1.30,
+                 entry_direction=Direction.DOWN, hedged=True)
+    o = strat.decide(MARKET, p, Direction.DOWN, 0.92, 0.08, 60)
+    log.info("INSURANCE -> %s", tags(o))
+    assert o and o[0].reason_tag == "insurance" and o[0].direction is Direction.DOWN
 
     log.info("=========  ALL CHECKS PASSED  =========")
     return 0
