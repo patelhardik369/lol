@@ -25,14 +25,14 @@
 - [x] **CONFIRMED:** event/market carry a `resolutionSource` field; rules resolve via **Chainlink BTC/USD** (window end ≥ start ⇒ Up). Resolution is automatic on Polymarket; the bot reads it only for PnL.
 - [x] **GOTCHA CONFIRMED:** Gamma `bestBid`/`bestAsk` can be STALE — trust CLOB `/book` / `/price` / `/midpoint` for live quotes. `/book` lists aren't reliably sorted, so the client sorts them (bids high→low, asks low→high).
 
-### 1.2 Polymarket — orders (CLOB API, via `py-clob-client`)
-- Flow: `create_order(OrderArgs)` → signed order → `post_order(signed, OrderType)`.
-- `OrderArgs`: `token_id`, `price`, `size`, `side` (BUY/SELL); optional `fee_rate_bps`, `nonce`, `expiration`, `taker`.
-- Order types: **GTC, GTD, FOK, FAK**.
-- **Maker control:** `postOnly` flag exists on `postOrder` (TS client confirmed: applies to GTC/GTD). [!] Confirm the Python `py-clob-client` exposes `post_only` / equivalent; if not, enforce maker purely via non‑crossing price + (optionally) raw REST field.
-- Tick sizes: `"0.1" | "0.01" | "0.001" | "0.0001"`; `negRisk` flag per market.
-- Auth: **L1** = wallet signer (private key, EIP‑712) for signing orders; **L2** = derived API key/secret/passphrase headers for posting. Creds can be derived via `create_or_derive_api_creds()`.
-- Order book / prices: `/book`, `/price`, `/midpoint`, `/spread`, `/tick-size` (CLOB market-data endpoints).
+### 1.2 Polymarket — orders (CLOB **V2**, via `py-clob-client-v2`)
+- **Client = `py-clob-client-v2`** (PyPI `py-clob-client-v2`, import `py_clob_client_v2`, v1.0.1, Python ≥3.9.10). Official; Polymarket asks users to migrate off the legacy `py-clob-client`. (Verified via PyPI + docs, 2026-06.)
+- Imports: `ApiCreds, ClobClient, OrderArgs, OrderType, PartialCreateOrderOptions, Side, MarketOrderArgs`.
+- Init: `ClobClient(host, chain_id=137, key=<PK>, creds=<ApiCreds>)`; derive L2 creds via `creds = client.create_or_derive_api_key()`.
+- Post a limit order: `client.create_and_post_order(order_args=OrderArgs(token_id, price, side, size), options=PartialCreateOrderOptions(tick_size="0.01"), order_type=OrderType.GTC)`.
+- Order types: **GTC, GTD, FOK, FAK**. Tick sizes `0.1/0.01/0.001/0.0001`; `negRisk` per market.
+- **Maker control:** primary guarantee = our non-crossing price math; confirm v2's post-only/options field in Phase 5 as the belt. [!] Verify v2 method names for read-book/cancel/positions in Phase 5 (README only showed order posting).
+- Order book / prices: `/book`, `/price`, `/midpoint`, `/spread`, `/tick-size` (public; already implemented with stdlib).
 
 ### 1.3 Binance — signal source
 - Spot: `GET https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=5m&limit=N` (limit ≤ 1000).

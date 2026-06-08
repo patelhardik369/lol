@@ -1,15 +1,18 @@
-# Runtime dependencies for the Polymarket BTC 5-minute maker bot.
+# Dependencies for the Polymarket BTC 5-minute maker bot.
 #
-# NOTE: The Phase 1 functional modules (config, logging_setup, market_clock,
-# main self-check) use ONLY the Python standard library, so `python main.py`
-# runs before any of these are installed. The packages below are needed from
-# Phase 2 onward (HTTP clients, CLOB signing, data handling). Exact pin for
-# py-clob-client is confirmed against the docs in Phase 2.
+# PAPER / DRY_RUN NEEDS NOTHING INSTALLED.
+# The read paths (Binance klines, Polymarket Gamma/CLOB market data) and the
+# paper-trade path use ONLY the Python standard library (urllib), so
+# `python main.py --dry-run` runs on a bare Python 3.9+ interpreter.
 
-requests>=2.31          # Binance klines + Polymarket Gamma/CLOB HTTP (Phase 2)
-python-dotenv>=1.0      # load secrets from a local .env (optional convenience)
-py-clob-client>=0.17    # Polymarket CLOB order build/sign/post (Phase 2 & 5)
-pandas>=2.0             # candle/data handling + backtests in scripts/ (Phase 5)
+# Optional convenience (DRY_RUN): load secrets/overrides from a local .env file.
+python-dotenv>=1.0
 
-# Dev / test (install manually as needed):
-#   pytest>=8.0
+# LIVE only (Phase 5): official Polymarket CLOB **V2** client.
+#   PyPI:  py-clob-client-v2    import:  py_clob_client_v2    Python >= 3.9.10
+#   This REPLACES the legacy `py-clob-client` (Polymarket asks users to migrate
+#   to V2). It pulls httpx[http2], eth-account, poly_eip712_structs, py-order-utils.
+py-clob-client-v2>=1.0.1
+
+# Optional (research/backtests in scripts/, Phase 5):
+# pandas>=2.0

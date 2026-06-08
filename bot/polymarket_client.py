@@ -1,8 +1,9 @@
 """Polymarket client: Gamma market discovery + CLOB market data + maker orders.
 
 Read paths (Gamma + CLOB) are public GETs and implemented here (Phase 2). LIVE
-order build/sign/post via py-clob-client is deferred to Phase 5; in DRY_RUN we log
-the fully-formed maker request instead of sending it.
+order build/sign/post via the official **py-clob-client-v2** is deferred to Phase 5
+(import `py_clob_client_v2`; legacy `py-clob-client` is superseded). In DRY_RUN we
+log the fully-formed maker request instead of sending it.
 
 DISCOVERY is deterministic: ``market_clock`` computes the active slug
 ``btc-updown-5m-<ts>``, then Gamma ``GET /events?slug=`` returns the event whose
