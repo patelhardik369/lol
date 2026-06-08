@@ -72,11 +72,14 @@ class Config:
     funder_address: str = ""    # proxy / funder wallet address
 
     # --- strategy thresholds (share prices in 0..1) -------------------------
-    entry_price: float = 0.58
+    entry_price: float = 0.58          # entry-band MAX: signal side must be <= this
+    entry_min_price: float = 0.45      # entry-band MIN: skip entering a deep underdog
     hedge_opposite_price: float = 0.52
     favorite_threshold: float = 0.80
     insurance_threshold: float = 0.10
-    price_tolerance: float = 0.01  # band around a target price for triggers
+    price_tolerance: float = 0.01      # band around a target price for triggers
+    favorite_margin_usd: float = 0.0   # favorite rule buys until fav_shares > cost + this
+    lock_margin_usd: float = 0.0       # lock when min(up,down) shares > cost + this
 
     # --- sizing (Polymarket floors apply on top) ----------------------------
     base_notional_usd: float = 1.0  # "exchange minimum" base entry
@@ -88,7 +91,8 @@ class Config:
     default_tick_size: str = "0.01"
     unfilled_timeout_sec: float = 3.0   # cancel & re-quote if not filled in 3s
     inner_tick_sec: float = 1.0         # fast in-window evaluation cadence
-    entry_stop_buffer_sec: float = 10.0  # stop opening new entries this close to window end
+    entry_stop_buffer_sec: float = 10.0  # stop opening new ENTRIES this close to window end
+    min_action_buffer_sec: float = 2.0   # place no orders at all in the last N seconds
 
     # --- per-market risk cap (disabled by design) ---------------------------
     max_loss_per_market: Optional[float] = None
@@ -96,6 +100,7 @@ class Config:
     # --- signal engine ------------------------------------------------------
     signal_name: str = "momentum"
     signal_lookback: int = 3
+    signal_min_pct: float = 0.0  # min |return| over lookback to commit to a side
 
     # --- paths / logging ----------------------------------------------------
     data_dir: str = "data"
@@ -123,10 +128,13 @@ class Config:
             api_passphrase=_get("POLYMARKET_API_PASSPHRASE"),
             funder_address=_get("POLYMARKET_FUNDER_ADDRESS"),
             entry_price=_get_float("ENTRY_PRICE", 0.58),
+            entry_min_price=_get_float("ENTRY_MIN_PRICE", 0.45),
             hedge_opposite_price=_get_float("HEDGE_OPPOSITE_PRICE", 0.52),
             favorite_threshold=_get_float("FAVORITE_THRESHOLD", 0.80),
             insurance_threshold=_get_float("INSURANCE_THRESHOLD", 0.10),
             price_tolerance=_get_float("PRICE_TOLERANCE", 0.01),
+            favorite_margin_usd=_get_float("FAVORITE_MARGIN_USD", 0.0),
+            lock_margin_usd=_get_float("LOCK_MARGIN_USD", 0.0),
             base_notional_usd=_get_float("BASE_NOTIONAL_USD", 1.0),
             min_shares=_get_int("MIN_SHARES", 5),
             min_notional_usd=_get_float("MIN_NOTIONAL_USD", 1.0),
@@ -135,8 +143,10 @@ class Config:
             unfilled_timeout_sec=_get_float("UNFILLED_TIMEOUT_SEC", 3.0),
             inner_tick_sec=_get_float("INNER_TICK_SEC", 1.0),
             entry_stop_buffer_sec=_get_float("ENTRY_STOP_BUFFER_SEC", 10.0),
+            min_action_buffer_sec=_get_float("MIN_ACTION_BUFFER_SEC", 2.0),
             signal_name=_get("SIGNAL_NAME", "momentum"),
             signal_lookback=_get_int("SIGNAL_LOOKBACK", 3),
+            signal_min_pct=_get_float("SIGNAL_MIN_PCT", 0.0),
             data_dir=_get("DATA_DIR", "data"),
             logs_dir=_get("LOGS_DIR", "logs"),
             log_level=_get("LOG_LEVEL", "INFO"),

@@ -88,18 +88,19 @@
   - [x] `cancel_order(order_id, dry_run)` (DRY_RUN logs); `get_positions()` — **deferred to Phase 5**.
 - [x] `scripts/probe_market.py` + `scripts/smoke_clients.py` (read-only/DRY_RUN) — both run green.
 
-## 6. Phase 3 — Strategy, positions, orders
-- [ ] `signal_engine.pick_direction(candles) -> UP | DOWN | NO_TRADE` (pluggable; default = short‑term momentum, params in config).
-- [ ] `position_manager`: per‑market UP/DOWN shares, avg prices, `locked` / `max_loss_hit` flags, lifecycle guard (one entry-cycle per market).
-- [ ] `order_manager`: **maker-only** price computation (non‑crossing vs best bid/ask) + `postOnly`; enforce min 5 shares & min $1 notional; `shares_for_notional()` helper; dedupe same-direction re-entry.
-  - [ ] **Fill-or-requote loop:** after placing, poll fill status; if unfilled after `unfilled_timeout_sec` (3s) ⇒ cancel + re-quote at nearest non-crossing price; repeat until filled or window end.
-- [ ] `strategy` lifecycle (all thresholds configurable, favorite-side variable):
-  - [ ] Entry near 0.58 on signal side.
-  - [ ] Hedge: if adverse and opposite side ≈0.52 ⇒ buy opposite (min size).
-  - [ ] Profit-lock: when favorable, construct guaranteed‑positive net payoff (buy opposite / partial close) → mark market **done**.
-  - [ ] Favorite (≥0.80): if favorite-side shares ≤ total cost basis, add until `shares > cost_basis` (within max exposure).
-  - [ ] Insurance (≤0.10): if fav‑side shares < other‑side shares, buy fav side up to **equalize**; if ≥, do nothing.
-  - [ ] Stop-loss: DISABLED by default (no cap, per Q3); hook left in place so a `max_loss_per_market` cap can be enabled in config.
+## 6. Phase 3 — Strategy, positions, orders  ✅ done (LIVE requote loop -> Phase 5)
+- [x] `signal_engine`: pluggable `pick_direction(candles)`; default `MomentumSignal` (lookback + min-%); `build_signal()` factory.
+- [x] `position_manager`: per-market UP/DOWN shares + cost basis, `entry_direction`/`hedged`/`locked`/`done`; `apply_fill`, `check_lock`, `realized_pnl`.
+- [x] `order_manager`: pure `floor_shares` (≥5 shares AND ≥$1), `maker_limit_price` (non-crossing vs best bid/ask) + `post_only`; `execute()` with DRY_RUN optimistic fill.
+  - [~] **Fill-or-requote loop:** `place_with_requote` skeleton (place → 3s → cancel → re-quote at nearest price); real fill-status polling is **Phase 5 (LIVE)**.
+- [x] `strategy` lifecycle (thresholds configurable; favorite = entry-side variable, symmetric UP/DOWN; one action/tick):
+  - [x] Entry: signal side priced in `[entry_min, entry_price]` (0.45–0.58).
+  - [x] Hedge: opposite side ≥ ~0.52 (adverse move), once, base size.
+  - [x] Favorite (≥0.80): top up entry side until `shares > cost` (a win profits).
+  - [x] Insurance (≤0.10): equalize entry side up to opposite side; else nothing.
+  - [x] Profit-lock: `check_lock` marks market done when `min(up,down) shares > cost` (guaranteed both-way). Payoffs are built by BUYING (no sell-leg), per the concrete thresholds.
+  - [x] Stop-loss: DISABLED by design (no per-market cap); config hook retained.
+- [x] `scripts/sim_strategy.py` — offline path sim + favorite/insurance/lock checks (all pass).
 
 ## 7. Phase 4 — PnL, CSV, main loop (DRY_RUN)
 - [ ] CSV schemas: `trades.csv` (ts, market_id, side, action, price, shares, notional, mode, reason_tag, order_id) · `positions.csv` · `pnl.csv` (market_id, resolved_outcome, invested, return, realized_pnl, ts_resolved).

@@ -109,6 +109,19 @@ class OrderRequest:
 
 
 @dataclass
+class Fill:
+    """Result of a (real or simulated) maker fill, applied to a Position."""
+
+    token_id: str
+    direction: Direction
+    side: Side
+    price: float
+    shares: float
+    reason_tag: str
+    order_id: Optional[str] = None
+
+
+@dataclass
 class Position:
     """Per-market holdings, owned by PositionManager."""
 
@@ -120,6 +133,8 @@ class Position:
     locked: bool = False        # profit locked -> market considered done
     max_loss_hit: bool = False  # reserved; per-market cap disabled by default
     done: bool = False          # no further entries this window
+    entry_direction: Optional[Direction] = None  # side of the initial entry
+    hedged: bool = False                          # opposite side bought as a hedge
 
     @property
     def total_cost(self) -> float:

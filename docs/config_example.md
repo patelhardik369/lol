@@ -31,11 +31,14 @@ no secrets.** Every variable below maps 1:1 to a field on `bot/config.py:Config`
 ## Strategy thresholds (share prices, 0..1)
 | Env | Default | Role |
 |-----|---------|------|
-| `ENTRY_PRICE` | `0.58` | Target price for the initial entry. |
+| `ENTRY_PRICE` | `0.58` | Entry-band MAX: signal side must be ≤ this to enter. |
+| `ENTRY_MIN_PRICE` | `0.45` | Entry-band MIN: skip deep-underdog entries. |
 | `HEDGE_OPPOSITE_PRICE` | `0.52` | Opposite-side price that triggers a hedge. |
 | `FAVORITE_THRESHOLD` | `0.80` | At/above this, run the favorite add-on. |
 | `INSURANCE_THRESHOLD` | `0.10` | At/below this, run the insurance equalize. |
 | `PRICE_TOLERANCE` | `0.01` | Band around a target price for triggers. |
+| `FAVORITE_MARGIN_USD` | `0.0` | Favorite buys until fav_shares > cost + this. |
+| `LOCK_MARGIN_USD` | `0.0` | Lock when min(up,down) shares > cost + this. |
 
 ## Sizing (Polymarket floors: >= 5 shares AND >= $1 notional)
 | Env | Default |
@@ -52,12 +55,14 @@ no secrets.** Every variable below maps 1:1 to a field on `bot/config.py:Config`
 | `UNFILLED_TIMEOUT_SEC` | `3` | Cancel & re-quote if unfilled within 3s. |
 | `INNER_TICK_SEC` | `1` | Fast in-window evaluation cadence. |
 | `ENTRY_STOP_BUFFER_SEC` | `10` | Stop opening new entries this close to close. |
+| `MIN_ACTION_BUFFER_SEC` | `2` | Place no orders at all in the last N seconds. |
 
 ## Signal engine
 | Env | Default |
 |-----|---------|
 | `SIGNAL_NAME` | `momentum` |
 | `SIGNAL_LOOKBACK` | `3` |
+| `SIGNAL_MIN_PCT` | `0.0` (min abs return over lookback to commit to a side) |
 
 ## Paths / logging
 | Env | Default |
