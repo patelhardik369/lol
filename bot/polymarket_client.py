@@ -24,7 +24,7 @@ from typing import List, Optional
 from . import market_clock
 from .config import Config
 from .logging_setup import get_logger
-from .models import BookLevel, MarketRef, OrderBook, OrderRequest
+from .models import BookLevel, Direction, MarketRef, OrderBook, OrderRequest
 from .net import get_json
 
 log = get_logger("polymarket")
@@ -51,10 +51,11 @@ class PolymarketClient:
         if isinstance(events, dict):  # tolerate a paginated wrapper
             events = events.get("data") or events.get("events") or []
         if not events:
-            log.info("no Gamma event for slug=%s (not listed yet?)", slug)
+            log.debug("no Gamma event for slug=%s (not listed yet?)", slug)
             return None
 
-        market = (events[0].get("markets") or [None])[0]
+        ev = events[0]
+        market = (ev.get("markets") or [None])[0]
         if not market:
             log.warning("event %s has no markets", slug)
             return None
@@ -82,8 +83,9 @@ class PolymarketClient:
             window_end=window_end,
             min_order_size=float(market.get("orderMinSize", self.config.min_shares)),
             neg_risk=bool(market.get("negRisk", False)),
+            title=str(ev.get("title") or ""),
         )
-        log.info("market %s cond=%s... tick=%s min=%.0f accepting=%s",
+        log.debug("market %s cond=%s... tick=%s min=%.0f accepting=%s",
                  slug, ref.condition_id[:10], ref.tick_size, ref.min_order_size,
                  market.get("acceptingOrders"))
         return ref
@@ -105,6 +107,37 @@ class PolymarketClient:
         for outcome, token in zip(outcomes, token_ids):
             if str(outcome).strip().lower() == label:
                 return str(token)
+        return None
+
+    def get_resolved_outcome(self, slug: str) -> Optional[Direction]:
+        """Return the REAL settled winner (UP/DOWN) for a finished market, or None
+        if it isn't settled yet. Reads Gamma `outcomePrices`: once resolved the
+        winning outcome's price is ~1.0 and the loser's ~0.0."""
+        try:
+            events = get_json(f"{self.config.gamma_base_url}/events", {"slug": slug})
+        except Exception as e:
+            log.debug("resolved-outcome fetch failed for %s: %s", slug, e)
+            return None
+        if isinstance(events, dict):
+            events = events.get("data") or events.get("events") or []
+        if not events:
+            return None
+        market = (events[0].get("markets") or [None])[0]
+        if not market:
+            return None
+        outcomes = self._loads_list(market.get("outcomes"))
+        prices = self._loads_list(market.get("outcomePrices"))
+        try:
+            fprices = [float(p) for p in prices]
+        except (TypeError, ValueError):
+            return None
+        if not fprices or max(fprices) < 0.99:  # not settled yet
+            return None
+        win_label = str(outcomes[fprices.index(max(fprices))]).strip().lower()
+        if win_label == "up":
+            return Direction.UP
+        if win_label == "down":
+            return Direction.DOWN
         return None
 
     # ------------------------------------------------------------------ #
@@ -149,7 +182,7 @@ class PolymarketClient:
         LIVE: real CLOB build/sign/post with post_only — implemented in Phase 5.
         """
         if dry_run or not self.config.is_live:
-            log.info("[DRY_RUN] MAKER %s %s size=%.0f @ %.3f tok=%s... reason=%s post_only=%s",
+            log.debug("[DRY_RUN] MAKER %s %s size=%.0f @ %.3f tok=%s... reason=%s post_only=%s",
                      order.side.value, order.direction.value, order.size, order.price,
                      order.token_id[:8], order.reason_tag, self.config.post_only)
             return None
@@ -157,7 +190,7 @@ class PolymarketClient:
 
     def cancel_order(self, order_id: str, dry_run: bool) -> bool:
         if dry_run or not self.config.is_live:
-            log.info("[DRY_RUN] CANCEL order_id=%s", order_id)
+            log.debug("[DRY_RUN] CANCEL order_id=%s", order_id)
             return True
         raise NotImplementedError("LIVE cancel -> Phase 5")
 

@@ -72,7 +72,7 @@ class Strategy:
             if cfg.entry_min_price <= p_entry <= cfg.entry_price:
                 size = floor_shares(cfg.base_notional_usd, p_entry,
                                     market.min_order_size, cfg.min_notional_usd)
-                log.info("ENTRY: signal=%s priced %.3f in band [%.2f, %.2f] -> buy %.0f",
+                log.debug("ENTRY: signal=%s priced %.3f in band [%.2f, %.2f] -> buy %.0f",
                          signal.value, p_entry, cfg.entry_min_price, cfg.entry_price, size)
                 return [self._buy(market, signal, size, p_entry, "entry")]
             log.debug("no entry: %s %.3f outside band [%.2f, %.2f]",
@@ -95,14 +95,14 @@ class Strategy:
             denom = max(1e-6, 1.0 - p_entry)
             need = (cost + cfg.favorite_margin_usd - entry_sh) / denom
             d = max(math.ceil(need + 1e-9), market.min_order_size)
-            log.info("FAVORITE %s @ %.3f: shares %.0f <= cost $%.2f -> buy %.0f more",
+            log.debug("FAVORITE %s @ %.3f: shares %.0f <= cost $%.2f -> buy %.0f more",
                      entry.value, p_entry, entry_sh, cost, d)
             return [self._buy(market, entry, d, p_entry, "favorite")]
 
         # R3 insurance (entry side <= 0.10): equalize entry up to opposite -----
         if p_entry <= cfg.insurance_threshold and entry_sh < opp_sh:
             d = max(opp_sh - entry_sh, market.min_order_size)
-            log.info("INSURANCE %s @ %.3f: %.0f < opposite %.0f -> buy %.0f to equalize",
+            log.debug("INSURANCE %s @ %.3f: %.0f < opposite %.0f -> buy %.0f to equalize",
                      entry.value, p_entry, entry_sh, opp_sh, d)
             return [self._buy(market, entry, d, p_entry, "insurance")]
 
@@ -110,7 +110,7 @@ class Strategy:
         if not position.hedged and p_opp >= cfg.hedge_opposite_price - cfg.price_tolerance:
             size = floor_shares(cfg.base_notional_usd, p_opp, market.min_order_size,
                                 cfg.min_notional_usd)
-            log.info("HEDGE: opposite %s rose to %.3f (>= %.2f) -> buy %.0f",
+            log.debug("HEDGE: opposite %s rose to %.3f (>= %.2f) -> buy %.0f",
                      opp.value, p_opp, cfg.hedge_opposite_price, size)
             return [self._buy(market, opp, size, p_opp, "hedge")]
 

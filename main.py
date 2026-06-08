@@ -15,6 +15,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import signal
 import sys
 
@@ -41,7 +42,24 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--log-level", default=None, help="override LOG_LEVEL, e.g. DEBUG")
     p.add_argument("--max-seconds", type=float, default=None,
                    help="stop after N seconds (bounded run for testing)")
+    p.add_argument("--reset", action="store_true",
+                   help="delete prior run data (trades/positions/pnl CSVs + state.json) before starting")
     return p.parse_args(argv)
+
+
+def reset_data(config: Config, log) -> None:
+    """Delete prior run artifacts so the session starts from a clean slate."""
+    removed = 0
+    for name in ("trades.csv", "positions.csv", "pnl.csv", "state.json"):
+        path = os.path.join(config.data_dir, name)
+        try:
+            os.remove(path)
+            removed += 1
+            log.info("reset: removed %s", path)
+        except FileNotFoundError:
+            pass
+    if removed == 0:
+        log.info("reset: no prior data files to remove")
 
 
 def main(argv=None) -> int:
@@ -59,6 +77,9 @@ def main(argv=None) -> int:
     log.info("=" * 70)
     log.info("Polymarket BTC 5m maker bot v%s | mode=%s | signal=Binance SPOT %s %s",
              __version__, config.mode, config.binance_symbol, config.binance_interval)
+
+    if args.reset:
+        reset_data(config, log)
 
     for problem in config.validate():
         log.warning("config: %s", problem)

@@ -27,12 +27,17 @@ python main.py --dry-run --max-seconds 60 --log-level DEBUG
 
 # Unbounded loop (Ctrl-C to stop; state is flushed on exit):
 python main.py --dry-run
+
+# Start FRESH — wipe prior trades/positions/pnl CSVs + state.json first:
+python main.py --dry-run --reset
 ```
 
 Each 5-minute window the bot discovers the market, computes the Binance 5m signal
 once, then ticks ~1×/sec: reads the UP/DOWN order books, runs the strategy, and
-**logs hypothetical maker orders** (nothing is sent). At window end it resolves the
-outcome (Binance candle as a Chainlink proxy) and records realized PnL.
+**logs hypothetical maker orders** (nothing is sent) as a clean trade blotter.
+~2.5 min after a window closes (`RESOLVE_DELAY_SEC`) it reads the **real settled
+outcome** from Polymarket (Binance candle only as a fallback), records realized
+PnL, and prints the running + final **session P&L**.
 
 > Tip: trades only fire when the signal side is priced inside the entry band
 > `[0.45, 0.58]`. If BTC is trending hard, the favorite is often already >0.58 and
@@ -53,7 +58,7 @@ python scripts/smoke_clients.py  # klines + discovery + book + one DRY_RUN order
 ## Outputs
 - `logs/bot.log` — full timestamped log (rotating).
 - `data/trades.csv` — every paper fill (ts, slug, direction, side, price, shares, notional, mode, reason_tag, order_id).
-- `data/positions.csv` — position snapshot after each fill.
+- `data/positions.csv` — final position snapshot, one row per resolved market.
 - `data/pnl.csv` — realized PnL per resolved market.
 - `data/state.json` — restart-safety state (finalized windows + positions).
 

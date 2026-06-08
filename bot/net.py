@@ -63,12 +63,12 @@ def get_json(url: str, params: Optional[dict] = None, *,
                 pass
             if e.code == 429 or 500 <= e.code < 600:
                 last_exc = HttpError(e.code, url, body)
-                log.warning("GET %s -> %s (attempt %d/%d), retrying", url, e.code, attempt, retries)
+                log.debug("GET %s -> %s (attempt %d/%d), retrying", url, e.code, attempt, retries)
             else:
                 raise HttpError(e.code, url, body) from e
         except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
             last_exc = e
-            log.warning("GET %s failed: %s (attempt %d/%d), retrying", url, e, attempt, retries)
+            log.debug("GET %s failed: %s (attempt %d/%d), retrying", url, e, attempt, retries)
         if attempt < retries:
             time.sleep(backoff * attempt)
 

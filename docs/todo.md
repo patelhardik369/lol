@@ -109,6 +109,7 @@
 - [x] `runner`: outer 300s market-roll + inner ~1s tick; signal computed once/window; per-tick book read → strategy → execute → CSV; window-end resolve (Binance candle as Chainlink proxy) → PnL; resilient (per-tick try/except).
 - [x] `main.py`: load config, wire components, DRY_RUN default, `--live` refused until Phase 5, `--max-seconds`, graceful SIGINT/SIGTERM flush.
 - [x] Validated: `scripts/sim_runner.py` (offline CSVs) + live `python main.py --dry-run --max-seconds 7` (discovery/signal/ticks/hold/stop).
+- [x] Polish (post-run feedback): clean console **blotter** (`bot/report.py`, blank-spaced market headers + one line/trade) with full-detail file log; **delayed resolution** (~`resolve_delay_sec`=150s) reading Polymarket's real settled `outcomePrices` (Binance fallback); running + final **session P&L**; `positions.csv` = one row per resolved market; `main.py --reset` wipes prior run data.
 
 ## 8. Phase 5 — LIVE mode & hardening
 - [ ] LIVE switch (requires creds present + explicit `--live`).

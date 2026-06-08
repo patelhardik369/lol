@@ -2,23 +2,24 @@
 
 OUTER loop rolls to the new market on every 300s boundary; INNER loop ticks about
 every ``inner_tick_sec`` within a window:
-  - at window START: discover the market (Gamma) and compute the signal ONCE
-    (the 5m direction for the whole window).
-  - each TICK: read the UP/DOWN order books, run the strategy, execute any maker
-    order, update the position + CSVs, and check for a guaranteed-profit lock.
-  - at window END: resolve the outcome (Binance 5m candle as a Chainlink proxy)
-    and record realized PnL.
+  - at window START: discover the market (Gamma) and compute the signal ONCE.
+  - each TICK: read the UP/DOWN books, run the strategy, execute any maker order,
+    update the position, and report the trade.
+  - at window END: the window is queued for DELAYED resolution. After
+    ``resolve_delay_sec`` (~2.5 min) we read the REAL settled outcome from
+    Polymarket (`outcomePrices`), falling back to the Binance 5m candle only if
+    it isn't settled yet, then record realized + running session P&L.
 
-Resilient: a failing tick is logged and skipped, not fatal. State (done windows +
-positions) is persisted so a restart doesn't double-act on a handled window.
+Console output is the clean trade blotter (via ``bot.report``); full internals are
+in logs/bot.log. Resilient: a failing cycle is logged and skipped, never fatal.
 """
 
 from __future__ import annotations
 
 import time
-from typing import Optional, Set
+from typing import List, Optional, Set, Tuple
 
-from . import market_clock
+from . import market_clock, report
 from .config import Config
 from .logging_setup import get_logger
 from .market_clock import Window
@@ -45,6 +46,7 @@ class Runner:
         self.market: Optional[MarketRef] = None
         self.direction: Direction = Direction.NO_TRADE
         self._done: Set[str] = set()
+        self._pending: List[Tuple[Window, float]] = []  # (window, resolve_at_epoch)
 
         if self.state is not None:
             self._restore()
@@ -57,8 +59,9 @@ class Runner:
 
     def run(self, max_seconds: Optional[float] = None) -> None:
         started = time.time()
-        log.info("runner start: mode=%s inner_tick=%.1fs%s", self.config.mode,
-                 self.config.inner_tick_sec,
+        log.info("runner start: mode=%s inner_tick=%.1fs resolve_delay=%.0fs%s",
+                 self.config.mode, self.config.inner_tick_sec,
+                 self.config.resolve_delay_sec,
                  f" max_seconds={max_seconds}" if max_seconds else "")
         while not self._stop:
             try:
@@ -69,6 +72,7 @@ class Runner:
                         self._on_window_end(self.active_window)
                     self._on_window_start(window)
                 self._tick(window, now)
+                self._process_pending(now)
             except Exception as e:  # never let one bad cycle kill the loop
                 log.exception("tick error: %s", e)
 
@@ -80,8 +84,12 @@ class Runner:
         self.shutdown()
 
     def shutdown(self) -> None:
+        # Best-effort: resolve anything still pending so no P&L is lost on exit.
+        for window, _ in list(self._pending):
+            self.finalize(window, self._resolve_winner(window))
+        self._pending = []
         self._save_state()
-        log.info("runner stopped. done_windows=%d", len(self._done))
+        report.session_summary(self.pnl.session_realized, self.pnl.session_count)
 
     # ------------------------------------------------------------------ #
     # Window transitions                                                 #
@@ -91,7 +99,7 @@ class Runner:
         self.market = None
         self.direction = Direction.NO_TRADE
         if window.slug in self._done:
-            log.info("window %s already finalized this session; idling", window.slug)
+            log.debug("window %s already finalized; idling", window.slug)
             return
         self.market = self._discover(window)
         try:
@@ -100,17 +108,41 @@ class Runner:
         except Exception as e:
             log.warning("signal fetch failed: %s", e)
             self.direction = Direction.NO_TRADE
-        log.info(">>> WINDOW %s | signal=%s | market=%s | ends %s", window.slug,
-                 self.direction.value, "found" if self.market else "MISSING",
-                 window.end_dt.isoformat())
+        title = self.market.title if self.market else ""
+        report.window_header(title, window.slug, self.direction.value,
+                             window.end_dt.strftime("%H:%M:%S UTC"))
+        if self.market is None:
+            log.warning("  market not found yet for %s (will retry)", window.slug)
 
     def _on_window_end(self, window: Window) -> None:
-        winner = self._resolve_winner(window)
-        self.finalize(window, winner)
+        """Queue the finished window for DELAYED resolution (don't resolve now)."""
+        slug = window.slug
+        if slug in self._done:
+            return
+        pos = self.positions.get(slug)
+        if pos.up_shares == 0 and pos.down_shares == 0:
+            self._done.add(slug)
+            self._save_state()
+            return
+        resolve_at = window.end + self.config.resolve_delay_sec
+        self._pending.append((window, resolve_at))
+        log.debug("window %s closed; resolving in ~%ds", slug,
+                  int(self.config.resolve_delay_sec))
+
+    def _process_pending(self, now: float) -> None:
+        if not self._pending:
+            return
+        still: List[Tuple[Window, float]] = []
+        for window, resolve_at in self._pending:
+            if now >= resolve_at:
+                self.finalize(window, self._resolve_winner(window))
+            else:
+                still.append((window, resolve_at))
+        self._pending = still
 
     def finalize(self, window: Window, winner: Direction) -> None:
-        """Record realized PnL for a finished window. Public so the offline
-        sim can drive it with an explicit winner (no network)."""
+        """Record realized PnL for a finished window. Public so the offline sim can
+        drive it with an explicit winner (no network)."""
         slug = window.slug
         if slug in self._done:
             return
@@ -120,17 +152,21 @@ class Runner:
             self._save_state()
             return
         if winner not in (Direction.UP, Direction.DOWN):
-            log.warning("window %s winner unknown; marking done without PnL", slug)
+            log.warning("window %s winner unknown; marking done without P&L", slug)
             self.positions.mark_done(slug, locked=pos.locked)
+            self.pnl.record_position(pos)
             self._done.add(slug)
             self._save_state()
             return
         realized = self.positions.realized_pnl(pos, winner)
         self.pnl.record_resolution(pos, winner.value, realized)
         self.positions.mark_done(slug, locked=pos.locked)
+        self.pnl.record_position(pos)
         self._done.add(slug)
         self._save_state()
-        log.info("<<< RESOLVED %s winner=%s realized=%+.2f", slug, winner.value, realized)
+        ret = pos.up_shares if winner is Direction.UP else pos.down_shares
+        report.resolution(slug, winner.value, pos.total_cost, ret, realized,
+                          self.pnl.session_realized, self.pnl.session_count)
 
     # ------------------------------------------------------------------ #
     # Per-tick trading                                                   #
@@ -160,14 +196,16 @@ class Runner:
 
     def process_tick(self, window: Window, up_book: OrderBook, down_book: OrderBook,
                      up_price: float, down_price: float, seconds_remaining: float) -> None:
-        """Run the strategy for one tick and execute any resulting maker order.
-        Reused by both the live loop and the offline sim."""
-        pos = self.positions.get(window.slug)
+        """Run the strategy for one tick and execute any maker order. Reused by the
+        live loop and the offline sim."""
+        slug = window.slug
+        pos = self.positions.get(slug)
+        was_locked = pos.locked
         orders = self.strategy.decide(self.market, pos, self.direction, up_price,
                                       down_price, seconds_remaining)
         if not orders:
             log.debug("tick %s: hold (UP=%.3f DOWN=%.3f %.0fs left)",
-                      window.slug, up_price, down_price, seconds_remaining)
+                      slug, up_price, down_price, seconds_remaining)
             return
         tick = float(self.market.tick_size)
         dry = not self.config.is_live
@@ -176,11 +214,14 @@ class Runner:
             fill = self.orders.execute(order, book, tick, dry_run=dry)
             if fill is None:
                 continue
-            self.positions.apply_fill(window.slug, fill)
-            self.pnl.record_trade(window.slug, order, fill.shares, fill.price,
+            self.positions.apply_fill(slug, fill)
+            self.pnl.record_trade(slug, order, fill.shares, fill.price,
                                   self.config.mode, fill.order_id)
-            self.positions.check_lock(window.slug)
-        self.pnl.record_position(self.positions.get(window.slug))
+            report.trade(order.reason_tag, fill, self.positions.get(slug))
+            self.positions.check_lock(slug)
+        pos = self.positions.get(slug)
+        if pos.locked and not was_locked:
+            report.lock(pos, min(pos.up_shares, pos.down_shares) - pos.total_cost)
 
     # ------------------------------------------------------------------ #
     # Helpers                                                            #
@@ -193,17 +234,27 @@ class Runner:
             return None
 
     def _resolve_winner(self, window: Window) -> Direction:
-        """Proxy resolution: the Binance 5m candle whose open_time == window start.
-        close >= open -> UP, else DOWN. (Polymarket itself resolves on Chainlink.)"""
+        """Prefer the REAL Polymarket settlement; fall back to the Binance 5m
+        candle (close >= open -> UP) only if Polymarket isn't settled yet."""
         try:
-            klines = self.binance.get_recent_klines_5m(limit=12)
-            target_ms = window.start * 1000
-            for k in klines:
-                if k.open_time == target_ms:
-                    return Direction.UP if k.close >= k.open else Direction.DOWN
-            log.warning("no Binance candle for window start %d", window.start)
+            winner = self.polymarket.get_resolved_outcome(window.slug)
+            if winner in (Direction.UP, Direction.DOWN):
+                log.debug("resolved %s via Polymarket: %s", window.slug, winner.value)
+                return winner
+        except Exception as e:
+            log.debug("polymarket resolve failed: %s", e)
+        try:
+            if self.binance is not None:
+                klines = self.binance.get_recent_klines_5m(limit=12)
+                target_ms = window.start * 1000
+                for k in klines:
+                    if k.open_time == target_ms:
+                        proxy = Direction.UP if k.close >= k.open else Direction.DOWN
+                        log.debug("resolved %s via Binance proxy: %s", window.slug, proxy.value)
+                        return proxy
         except Exception as e:
             log.warning("winner resolution failed: %s", e)
+        log.warning("no resolution available for %s", window.slug)
         return Direction.NO_TRADE
 
     def _save_state(self) -> None:

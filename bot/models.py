@@ -62,6 +62,7 @@ class MarketRef:
     window_end: int
     min_order_size: float = 5.0  # Polymarket per-market min shares (orderMinSize)
     neg_risk: bool = False
+    title: str = ""              # human-readable event title (for clean logs)
 
     def token_id(self, direction: Direction) -> str:
         if direction is Direction.UP:

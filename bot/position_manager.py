@@ -49,7 +49,7 @@ class PositionManager:
         else:  # SELL reduces shares + cost at the running average price
             self._apply_sell(pos, fill)
 
-        log.info("FILL %s %s %.0f @ %.3f [%s] -> UP %.0f/$%.2f  DOWN %.0f/$%.2f  cost $%.2f",
+        log.debug("FILL %s %s %.0f @ %.3f [%s] -> UP %.0f/$%.2f  DOWN %.0f/$%.2f  cost $%.2f",
                  fill.side.value, fill.direction.value, fill.shares, fill.price,
                  fill.reason_tag, pos.up_shares, pos.up_cost, pos.down_shares,
                  pos.down_cost, pos.total_cost)
@@ -84,7 +84,7 @@ class PositionManager:
             if guaranteed > pos.total_cost + self.config.lock_margin_usd + 1e-9:
                 pos.locked = True
                 pos.done = True
-                log.info("LOCKED %s: min(up=%.0f, down=%.0f)=%.0f > cost $%.2f "
+                log.debug("LOCKED %s: min(up=%.0f, down=%.0f)=%.0f > cost $%.2f "
                          "-> guaranteed >= $%.2f either way", slug, pos.up_shares,
                          pos.down_shares, guaranteed, pos.total_cost,
                          guaranteed - pos.total_cost)
@@ -96,7 +96,7 @@ class PositionManager:
         pos.done = True
         if locked:
             pos.locked = True
-        log.info("market %s marked done (locked=%s)", slug, pos.locked)
+        log.debug("market %s marked done (locked=%s)", slug, pos.locked)
 
     def snapshot(self) -> Dict[str, dict]:
         """Serialize all positions to plain dicts (for state_store)."""

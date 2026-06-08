@@ -56,6 +56,7 @@ no secrets.** Every variable below maps 1:1 to a field on `bot/config.py:Config`
 | `INNER_TICK_SEC` | `1` | Fast in-window evaluation cadence. |
 | `ENTRY_STOP_BUFFER_SEC` | `10` | Stop opening new entries this close to close. |
 | `MIN_ACTION_BUFFER_SEC` | `2` | Place no orders at all in the last N seconds. |
+| `RESOLVE_DELAY_SEC` | `150` | Wait this long after a window ends, then read the real settled outcome. |
 
 ## Signal engine
 | Env | Default |

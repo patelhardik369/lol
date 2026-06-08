@@ -93,6 +93,7 @@ class Config:
     inner_tick_sec: float = 1.0         # fast in-window evaluation cadence
     entry_stop_buffer_sec: float = 10.0  # stop opening new ENTRIES this close to window end
     min_action_buffer_sec: float = 2.0   # place no orders at all in the last N seconds
+    resolve_delay_sec: float = 150.0     # wait this long after window end, then resolve the REAL outcome
 
     # --- per-market risk cap (disabled by design) ---------------------------
     max_loss_per_market: Optional[float] = None
@@ -144,6 +145,7 @@ class Config:
             inner_tick_sec=_get_float("INNER_TICK_SEC", 1.0),
             entry_stop_buffer_sec=_get_float("ENTRY_STOP_BUFFER_SEC", 10.0),
             min_action_buffer_sec=_get_float("MIN_ACTION_BUFFER_SEC", 2.0),
+            resolve_delay_sec=_get_float("RESOLVE_DELAY_SEC", 150.0),
             signal_name=_get("SIGNAL_NAME", "momentum"),
             signal_lookback=_get_int("SIGNAL_LOOKBACK", 3),
             signal_min_pct=_get_float("SIGNAL_MIN_PCT", 0.0),

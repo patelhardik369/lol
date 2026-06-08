@@ -42,6 +42,11 @@ class PnlTracker:
         self._ensure(self.trades_path, TRADES_HEADER)
         self._ensure(self.positions_path, POSITIONS_HEADER)
         self._ensure(self.pnl_path, PNL_HEADER)
+        # Running session P&L = sum of all rows already in pnl.csv, so a resumed
+        # run continues the total (a --reset wipes pnl.csv -> starts at 0).
+        self.session_realized = 0.0
+        self.session_count = 0
+        self._load_totals()
 
     @staticmethod
     def _ensure(path: str, header: list) -> None:
@@ -53,6 +58,18 @@ class PnlTracker:
     def _append(path: str, row: list) -> None:
         with open(path, "a", newline="", encoding="utf-8") as f:
             csv.writer(f).writerow(row)
+
+    def _load_totals(self) -> None:
+        try:
+            with open(self.pnl_path, encoding="utf-8") as f:
+                for row in csv.DictReader(f):
+                    try:
+                        self.session_realized += float(row.get("realized_pnl") or 0.0)
+                        self.session_count += 1
+                    except ValueError:
+                        continue
+        except FileNotFoundError:
+            pass
 
     def record_trade(self, slug: str, order: OrderRequest, shares: float,
                      price: float, mode: str, order_id=None) -> None:
@@ -85,5 +102,7 @@ class PnlTracker:
             f"{pos.down_shares:.4f}", f"{pos.total_cost:.4f}",
             f"{total_return:.4f}", f"{realized_pnl:.4f}",
         ])
-        log.info("PNL %s outcome=%s invested=$%.2f return=$%.2f realized=%+.2f",
-                 pos.slug, resolved_outcome, pos.total_cost, total_return, realized_pnl)
+        self.session_realized += realized_pnl
+        self.session_count += 1
+        log.debug("PNL %s outcome=%s invested=$%.2f return=$%.2f realized=%+.2f",
+                  pos.slug, resolved_outcome, pos.total_cost, total_return, realized_pnl)
