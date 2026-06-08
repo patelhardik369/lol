@@ -1,0 +1,26 @@
+# secrets — never commit
+.env
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.pytest_cache/
+
+# bot runtime data & logs (keep the folders via .gitkeep, ignore contents)
+data/*.csv
+data/*.json
+logs/*.log
+logs/*.log.*
+
+# os / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

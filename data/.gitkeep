@@ -1,0 +1,2 @@
+# Placeholder so git tracks this directory. Runtime CSVs (trades.csv,
+# positions.csv, pnl.csv) and state.json are written here and are gitignored.

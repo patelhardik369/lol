@@ -1,0 +1,15 @@
+# Runtime dependencies for the Polymarket BTC 5-minute maker bot.
+#
+# NOTE: The Phase 1 functional modules (config, logging_setup, market_clock,
+# main self-check) use ONLY the Python standard library, so `python main.py`
+# runs before any of these are installed. The packages below are needed from
+# Phase 2 onward (HTTP clients, CLOB signing, data handling). Exact pin for
+# py-clob-client is confirmed against the docs in Phase 2.
+
+requests>=2.31          # Binance klines + Polymarket Gamma/CLOB HTTP (Phase 2)
+python-dotenv>=1.0      # load secrets from a local .env (optional convenience)
+py-clob-client>=0.17    # Polymarket CLOB order build/sign/post (Phase 2 & 5)
+pandas>=2.0             # candle/data handling + backtests in scripts/ (Phase 5)
+
+# Dev / test (install manually as needed):
+#   pytest>=8.0
