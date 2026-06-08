@@ -1,37 +1,46 @@
 """Entrypoint for the Polymarket BTC 5-minute maker bot.
 
-Phase 1 status: SCAFFOLDING ONLY. Running this performs a safe self-check — it
-loads config, sets up logging, and prints the deterministic current/next market
-slug computed purely from the clock. It does NOT contact Binance or Polymarket and
-does NOT place orders. The trading loop (Runner) arrives in Phase 4.
+Loads config, wires the components, and runs the 5-minute trading loop. Defaults
+to DRY_RUN (paper, no orders). LIVE order posting is enabled in Phase 5; selecting
+--live before then is refused with a clear message rather than half-trading.
 
 Usage:
-    python main.py                 # DRY_RUN self-check (default)
-    python main.py --dry-run       # explicit DRY_RUN
-    python main.py --live          # selects LIVE mode (inert until Phase 5)
+    python main.py                      # DRY_RUN loop (Ctrl-C to stop)
+    python main.py --dry-run            # explicit DRY_RUN
+    python main.py --max-seconds 30     # bounded DRY_RUN run (handy for testing)
+    python main.py --live               # refused until Phase 5
     python main.py --log-level DEBUG
 """
 
 from __future__ import annotations
 
 import argparse
+import signal
 import sys
-import time
 
 from bot import __version__, market_clock
+from bot.binance_client import BinanceClient
 from bot.config import DRY_RUN, LIVE, Config
 from bot.logging_setup import setup_logging
+from bot.order_manager import OrderManager
+from bot.pnl_tracker import PnlTracker
+from bot.polymarket_client import PolymarketClient
+from bot.position_manager import PositionManager
+from bot.runner import Runner
+from bot.signal_engine import build_signal
+from bot.state_store import StateStore
+from bot.strategy import Strategy
 
 
 def parse_args(argv=None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Polymarket BTC 5-minute maker bot")
     mode = p.add_mutually_exclusive_group()
-    mode.add_argument("--dry-run", action="store_true",
-                      help="paper mode (default)")
+    mode.add_argument("--dry-run", action="store_true", help="paper mode (default)")
     mode.add_argument("--live", action="store_true",
-                      help="LIVE mode (requires creds; inert until Phase 5)")
-    p.add_argument("--log-level", default=None,
-                   help="override LOG_LEVEL, e.g. DEBUG")
+                      help="LIVE mode (requires creds; enabled in Phase 5)")
+    p.add_argument("--log-level", default=None, help="override LOG_LEVEL, e.g. DEBUG")
+    p.add_argument("--max-seconds", type=float, default=None,
+                   help="stop after N seconds (bounded run for testing)")
     return p.parse_args(argv)
 
 
@@ -48,28 +57,48 @@ def main(argv=None) -> int:
 
     log = setup_logging(config.log_level, config.logs_dir)
     log.info("=" * 70)
-    log.info("Polymarket BTC 5m maker bot v%s  |  mode=%s", __version__, config.mode)
-    log.info("Signal source: Binance SPOT %s %s",
-             config.binance_symbol, config.binance_interval)
-
-    # Deterministic market identity straight from the clock — no network involved.
-    now = time.time()
-    cur = market_clock.current_window(now)
-    nxt = market_clock.next_window(now)
-    log.info("Active window : %s", cur.slug)
-    log.info("  starts %s  ends %s  (%.0fs in, %.0fs left)",
-             cur.start_dt.isoformat(), cur.end_dt.isoformat(),
-             cur.seconds_into(now), cur.seconds_remaining(now))
-    log.info("Next window   : %s (starts %s)", nxt.slug, nxt.start_dt.isoformat())
+    log.info("Polymarket BTC 5m maker bot v%s | mode=%s | signal=Binance SPOT %s %s",
+             __version__, config.mode, config.binance_symbol, config.binance_interval)
 
     for problem in config.validate():
         log.warning("config: %s", problem)
 
+    # LIVE order posting arrives in Phase 5; refuse rather than crash mid-trade.
     if config.is_live:
-        log.warning("LIVE selected, but live trading is not enabled until Phase 5. "
-                    "No orders will be sent.")
+        log.error("LIVE trading is not enabled until Phase 5. Re-run in DRY_RUN "
+                  "(default) — no orders were sent.")
+        return 2
 
-    log.info("Phase 1 scaffolding OK. Trading loop (Runner) arrives in Phase 4 - exiting.")
+    cur = market_clock.current_window()
+    log.info("starting at window %s (ends %s)", cur.slug, cur.end_dt.isoformat())
+
+    # Wire components.
+    binance = BinanceClient(config)
+    polymarket = PolymarketClient(config)
+    runner = Runner(
+        config=config,
+        binance=binance,
+        polymarket=polymarket,
+        signal=build_signal(config),
+        strategy=Strategy(config),
+        positions=PositionManager(config),
+        orders=OrderManager(config, polymarket),
+        pnl=PnlTracker(config),
+        state=StateStore(config),
+    )
+
+    # Graceful shutdown on Ctrl-C / SIGTERM -> flush state in runner.shutdown().
+    def _handle(signum, _frame):
+        log.info("signal %s received; stopping after this tick...", signum)
+        runner.request_stop()
+
+    signal.signal(signal.SIGINT, _handle)
+    try:
+        signal.signal(signal.SIGTERM, _handle)
+    except (AttributeError, ValueError):  # SIGTERM may be unavailable on Windows
+        pass
+
+    runner.run(max_seconds=args.max_seconds)
     log.info("=" * 70)
     return 0
 

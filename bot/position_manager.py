@@ -98,6 +98,34 @@ class PositionManager:
             pos.locked = True
         log.info("market %s marked done (locked=%s)", slug, pos.locked)
 
+    def snapshot(self) -> Dict[str, dict]:
+        """Serialize all positions to plain dicts (for state_store)."""
+        out: Dict[str, dict] = {}
+        for slug, p in self._positions.items():
+            out[slug] = {
+                "up_shares": p.up_shares, "down_shares": p.down_shares,
+                "up_cost": p.up_cost, "down_cost": p.down_cost,
+                "entry_direction": p.entry_direction.value if p.entry_direction else None,
+                "hedged": p.hedged, "locked": p.locked, "done": p.done,
+            }
+        return out
+
+    def restore(self, data: Dict[str, dict]) -> None:
+        """Rebuild positions from a snapshot() dict (restart safety)."""
+        for slug, d in (data or {}).items():
+            ed = d.get("entry_direction")
+            self._positions[slug] = Position(
+                slug=slug,
+                up_shares=float(d.get("up_shares", 0.0)),
+                down_shares=float(d.get("down_shares", 0.0)),
+                up_cost=float(d.get("up_cost", 0.0)),
+                down_cost=float(d.get("down_cost", 0.0)),
+                entry_direction=Direction(ed) if ed else None,
+                hedged=bool(d.get("hedged", False)),
+                locked=bool(d.get("locked", False)),
+                done=bool(d.get("done", False)),
+            )
+
     @staticmethod
     def realized_pnl(pos: Position, winning: Direction) -> float:
         """PnL if `winning` resolves true: winning shares pay $1 each, minus cost."""

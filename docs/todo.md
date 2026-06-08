@@ -102,11 +102,13 @@
   - [x] Stop-loss: DISABLED by design (no per-market cap); config hook retained.
 - [x] `scripts/sim_strategy.py` — offline path sim + favorite/insurance/lock checks (all pass).
 
-## 7. Phase 4 — PnL, CSV, main loop (DRY_RUN)
-- [ ] CSV schemas: `trades.csv` (ts, market_id, side, action, price, shares, notional, mode, reason_tag, order_id) · `positions.csv` · `pnl.csv` (market_id, resolved_outcome, invested, return, realized_pnl, ts_resolved).
-- [ ] `pnl_tracker`: realized per resolved market + unrealized while live.
-- [ ] `runner`: **outer loop** rolls to the new market each 300s boundary; **inner loop** ticks fast (~1s) within the window — refresh klines/odds → run strategy → drive the order_manager fill-or-requote (3s) loop → log every decision (incl. NO_TRADE reasons).
-- [ ] `main.py`: load config, build components, pick mode, run loop, graceful SIGINT flush.
+## 7. Phase 4 — PnL, CSV, main loop (DRY_RUN)  ✅ done
+- [x] CSV schemas in `pnl_tracker`: `trades.csv` (ts, slug, direction, side, price, shares, notional, mode, reason_tag, order_id) · `positions.csv` (snapshot per fill) · `pnl.csv` (ts_resolved, slug, outcome, up/down shares, invested, return, realized_pnl).
+- [x] `pnl_tracker`: realized PnL per resolved market (record_trade / record_position / record_resolution). Live position snapshots double as cost-basis state; mark-to-market unrealized = optional, not implemented.
+- [x] `state_store`: atomic JSON (`data/state.json`) — done-windows + position snapshot for restart safety; `position_manager.snapshot/restore`.
+- [x] `runner`: outer 300s market-roll + inner ~1s tick; signal computed once/window; per-tick book read → strategy → execute → CSV; window-end resolve (Binance candle as Chainlink proxy) → PnL; resilient (per-tick try/except).
+- [x] `main.py`: load config, wire components, DRY_RUN default, `--live` refused until Phase 5, `--max-seconds`, graceful SIGINT/SIGTERM flush.
+- [x] Validated: `scripts/sim_runner.py` (offline CSVs) + live `python main.py --dry-run --max-seconds 7` (discovery/signal/ticks/hold/stop).
 
 ## 8. Phase 5 — LIVE mode & hardening
 - [ ] LIVE switch (requires creds present + explicit `--live`).

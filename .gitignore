@@ -13,11 +13,11 @@ venv/
 env/
 .pytest_cache/
 
-# bot runtime data & logs (keep the folders via .gitkeep, ignore contents)
-data/*.csv
-data/*.json
-logs/*.log
-logs/*.log.*
+# bot runtime data & logs (keep the folders via .gitkeep, ignore everything else)
+data/*
+!data/.gitkeep
+logs/*
+!logs/.gitkeep
 
 # os / editor
 .DS_Store
