@@ -109,7 +109,9 @@ class Runner:
             log.warning("signal fetch failed: %s", e)
             self.direction = Direction.NO_TRADE
         title = self.market.title if self.market else ""
-        report.window_header(title, window.slug, self.direction.value,
+        basis = getattr(self.signal, "last_basis", "")
+        signal_str = f"{self.direction.value} ({basis})" if basis else self.direction.value
+        report.window_header(title, window.slug, signal_str,
                              window.end_dt.strftime("%H:%M:%S UTC"))
         if self.market is None:
             log.warning("  market not found yet for %s (will retry)", window.slug)

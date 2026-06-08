@@ -14,7 +14,8 @@ from .models import Fill, Position
 log = get_logger("report")
 
 _BAR = "=" * 68
-_TAG = {"entry": "ENTRY", "hedge": "HEDGE", "favorite": "FAVOR", "insurance": "INSUR"}
+_TAG = {"entry": "ENTRY", "lock": "LOCK", "hedge": "HEDGE", "favorite": "FAVOR",
+        "insurance": "INSUR"}
 
 
 def window_header(title: str, slug: str, signal: str, ends: str) -> None:

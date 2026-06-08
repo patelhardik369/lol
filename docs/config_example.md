@@ -38,7 +38,10 @@ no secrets.** Every variable below maps 1:1 to a field on `bot/config.py:Config`
 | `INSURANCE_THRESHOLD` | `0.10` | At/below this, run the insurance equalize. |
 | `PRICE_TOLERANCE` | `0.01` | Band around a target price for triggers. |
 | `FAVORITE_MARGIN_USD` | `0.0` | Favorite buys until fav_shares > cost + this. |
-| `LOCK_MARGIN_USD` | `0.0` | Lock when min(up,down) shares > cost + this. |
+| `LOCK_MARGIN_USD` | `0.0` | Min guaranteed profit ($) required to lock (0 = any profit). |
+| `ENABLE_LOSS_HEDGE` | `false` | Literal-spec adverse hedge at ~0.52 (off by default; it blocks profit-locks). |
+
+> Entry is now **pure signal** (enter the signal side at any price). `ENTRY_PRICE` / `ENTRY_MIN_PRICE` are retained but no longer gate entry.
 
 ## Sizing (Polymarket floors: >= 5 shares AND >= $1 notional)
 | Env | Default |

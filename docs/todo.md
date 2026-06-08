@@ -93,13 +93,14 @@
 - [x] `position_manager`: per-market UP/DOWN shares + cost basis, `entry_direction`/`hedged`/`locked`/`done`; `apply_fill`, `check_lock`, `realized_pnl`.
 - [x] `order_manager`: pure `floor_shares` (≥5 shares AND ≥$1), `maker_limit_price` (non-crossing vs best bid/ask) + `post_only`; `execute()` with DRY_RUN optimistic fill.
   - [~] **Fill-or-requote loop:** `place_with_requote` skeleton (place → 3s → cancel → re-quote at nearest price); real fill-status polling is **Phase 5 (LIVE)**.
-- [x] `strategy` lifecycle (thresholds configurable; favorite = entry-side variable, symmetric UP/DOWN; one action/tick):
-  - [x] Entry: signal side priced in `[entry_min, entry_price]` (0.45–0.58).
-  - [x] Hedge: opposite side ≥ ~0.52 (adverse move), once, base size.
-  - [x] Favorite (≥0.80): top up entry side until `shares > cost` (a win profits).
-  - [x] Insurance (≤0.10): equalize entry side up to opposite side; else nothing.
-  - [x] Profit-lock: `check_lock` marks market done when `min(up,down) shares > cost` (guaranteed both-way). Payoffs are built by BUYING (no sell-leg), per the concrete thresholds.
-  - [x] Stop-loss: DISABLED by design (no per-market cap); config hook retained.
+- [x] `strategy` lifecycle (**REWORKED 2026-06-08** per user clarifications; favorite-side variable; one action/tick):
+  - [x] Entry: **pure signal, any price** — take the signal side at window open.
+  - [x] **Profit-lock (primary, the engine):** `lock_buy()` buys the cheaper outcome the moment it makes `min(up,down) shares > cost` → guaranteed-positive payoff; `check_lock` marks DONE.
+  - [x] Favorite (≥0.80, fallback): only when no lock is achievable, top up entry side until `shares > cost`.
+  - [x] Insurance (≤0.10): equalize entry side up to opposite when we hold fewer; else nothing.
+  - [x] Smart hedge: NO guaranteed-loss leg — opposite is bought only to LOCK. Literal ~0.52 hedge behind `ENABLE_LOSS_HEDGE` (default off; it blocks locks).
+  - [x] Signal: momentum + neutral zone (`signal_min_pct`); window header shows the % basis.
+  - [x] Stop-loss: DISABLED by design (no per-market cap).
 - [x] `scripts/sim_strategy.py` — offline path sim + favorite/insurance/lock checks (all pass).
 
 ## 7. Phase 4 — PnL, CSV, main loop (DRY_RUN)  ✅ done

@@ -58,8 +58,8 @@ def main() -> int:
     runner.market = MARKET
     runner.direction = Direction.UP
 
-    log.info("=== sim_runner: scripted window %s (resolves UP) ===", WINDOW.slug)
-    for up, secs in [(0.58, 280), (0.50, 250), (0.47, 220), (0.84, 150), (0.90, 90)]:
+    log.info("=== sim_runner: scripted window %s (entry -> lock, resolves UP) ===", WINDOW.slug)
+    for up, secs in [(0.55, 280), (0.70, 240)]:
         down = round(1.0 - up, 2)
         runner.process_tick(WINDOW, book(up), book(down), up, down, secs)
     runner.finalize(WINDOW, Direction.UP)  # window closed higher -> UP wins

@@ -80,6 +80,7 @@ class Config:
     price_tolerance: float = 0.01      # band around a target price for triggers
     favorite_margin_usd: float = 0.0   # favorite rule buys until fav_shares > cost + this
     lock_margin_usd: float = 0.0       # lock when min(up,down) shares > cost + this
+    enable_loss_hedge: bool = False    # literal-spec adverse hedge at ~0.52 (off: it blocks locks)
 
     # --- sizing (Polymarket floors apply on top) ----------------------------
     base_notional_usd: float = 1.0  # "exchange minimum" base entry
@@ -136,6 +137,7 @@ class Config:
             price_tolerance=_get_float("PRICE_TOLERANCE", 0.01),
             favorite_margin_usd=_get_float("FAVORITE_MARGIN_USD", 0.0),
             lock_margin_usd=_get_float("LOCK_MARGIN_USD", 0.0),
+            enable_loss_hedge=_get_bool("ENABLE_LOSS_HEDGE", False),
             base_notional_usd=_get_float("BASE_NOTIONAL_USD", 1.0),
             min_shares=_get_int("MIN_SHARES", 5),
             min_notional_usd=_get_float("MIN_NOTIONAL_USD", 1.0),

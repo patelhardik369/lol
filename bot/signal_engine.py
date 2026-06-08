@@ -1,10 +1,12 @@
 """Pluggable directional signal.
 
 Given recent Binance 5m candles, decide UP / DOWN / NO_TRADE. This is the ONLY
-intentionally swappable, somewhat-generic piece — isolated behind one method so it
-can be replaced without touching strategy, order, or position logic.
+intentionally swappable, somewhat-generic piece — isolated behind one method.
 
-Default = short-term momentum. All thresholds/lookback come from Config.
+Default = short-term momentum with a configurable NEUTRAL zone: if the move over
+the lookback is smaller than ``signal_min_pct`` we abstain (NO_TRADE) rather than
+forcing a coin-flip side. After each call the human-readable basis is stored on
+``last_basis`` so the runner can show *why* a side was picked.
 """
 
 from __future__ import annotations
@@ -22,41 +24,45 @@ log = get_logger("signal")
 class SignalEngine(Protocol):
     """Anything with this shape can drive direction selection."""
 
+    last_basis: str
+
     def pick_direction(self, candles: List[Kline]) -> Direction: ...
 
 
 class MomentumSignal:
-    """Compare the latest close to the close ``signal_lookback`` candles earlier.
-
-    Up-move -> UP, down-move -> DOWN, flat (within ``signal_min_pct``) -> NO_TRADE.
-    Expects CLOSED candles (caller passes ``closed_only=True``); the in-progress
-    candle would otherwise make the signal flap intra-window.
-    """
+    """Compare the latest CLOSED 5m close to the close ``signal_lookback`` candles
+    earlier. Up-move beyond ``signal_min_pct`` -> UP, down-move -> DOWN, otherwise
+    NO_TRADE (flat). ``signal_min_pct`` is a fraction (0.001 = 0.1%)."""
 
     def __init__(self, config: Config) -> None:
         self.config = config
+        self.last_basis = ""
 
     def pick_direction(self, candles: List[Kline]) -> Direction:
         lb = max(1, self.config.signal_lookback)
         if len(candles) < lb + 1:
-            log.debug("signal: only %d candles (<%d) -> NO_TRADE", len(candles), lb + 1)
+            self.last_basis = f"only {len(candles)} candles (<{lb + 1})"
             return Direction.NO_TRADE
 
         recent = candles[-1].close
         past = candles[-1 - lb].close
         if past <= 0:
+            self.last_basis = "bad candle data"
             return Direction.NO_TRADE
 
         change = (recent - past) / past
-        if change > self.config.signal_min_pct:
+        self.last_basis = f"{change * 100:+.3f}% over {lb * 5}m"
+        threshold = self.config.signal_min_pct
+        if change > threshold:
             direction = Direction.UP
-        elif change < -self.config.signal_min_pct:
+        elif change < -threshold:
             direction = Direction.DOWN
         else:
+            self.last_basis += " (flat->NO_TRADE)"
             direction = Direction.NO_TRADE
 
-        log.debug("signal: past=%.2f recent=%.2f chg=%+.4f%% -> %s",
-                  past, recent, change * 100, direction.value)
+        log.debug("signal: past=%.2f recent=%.2f -> %s [%s]",
+                  past, recent, direction.value, self.last_basis)
         return direction
 
 
