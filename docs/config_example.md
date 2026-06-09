@@ -38,8 +38,9 @@ no secrets.** Every variable below maps 1:1 to a field on `bot/config.py:Config`
 | `INSURANCE_THRESHOLD` | `0.10` | At/below this, run the insurance equalize. |
 | `PRICE_TOLERANCE` | `0.01` | Band around a target price for triggers. |
 | `FAVORITE_MIN_PROFIT_USD` | `0.5` | Favorite tops up the favored side until a win there profits >= this. |
-| `LOCK_MARGIN_USD` | `0.0` | Min guaranteed profit ($) required to lock (0 = any profit). |
-| `ENABLE_LOSS_HEDGE` | `true` | Backup plan: buy the opposite when the entry goes adverse (~0.52). |
+| `LOCK_SUM` | `0.90` | Equalize to LOCK when per-pair cost <= this (entry 0.58 + opposite 0.32). |
+| `STOPLOSS_SUM` | `1.10` | Equalize to STOP-LOSS when per-pair cost >= this (entry 0.58 + opposite 0.52). |
+| `ENABLE_LOSS_HEDGE` | `true` | Allow the stop-loss equalize (false = never add a losing leg). |
 
 > Entry is now **pure signal** (enter the signal side at any price). `ENTRY_PRICE` / `ENTRY_MIN_PRICE` are retained but no longer gate entry.
 

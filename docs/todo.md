@@ -93,14 +93,14 @@
 - [x] `position_manager`: per-market UP/DOWN shares + cost basis, `entry_direction`/`hedged`/`locked`/`done`; `apply_fill`, `check_lock`, `realized_pnl`.
 - [x] `order_manager`: pure `floor_shares` (≥5 shares AND ≥$1), `maker_limit_price` (non-crossing vs best bid/ask) + `post_only`; `execute()` with DRY_RUN optimistic fill.
   - [~] **Fill-or-requote loop:** `place_with_requote` skeleton (place → 3s → cancel → re-quote at nearest price); real fill-status polling is **Phase 5 (LIVE)**.
-- [x] `strategy` lifecycle (REWORKED 2026-06-08 — added the adverse BACKUP chain; market-side favorite/insurance; one action/tick):
+- [x] `strategy` lifecycle (REWORKED 2026-06-08 — PER-PAIR-COST hedging per spec §4 (0.58/0.32/0.52); $1+5-share floor on EVERY order; one action/tick):
   - [x] Entry: **pure signal, any price** — take the signal side at window open.
-  - [x] 1. Profit-lock: `lock_buy()` buys the cheaper outcome the moment `min(up,down) shares > cost` → guaranteed payoff, mark DONE.
-  - [x] 2. Hedge/stop-loss (§4, backup): entry adverse (opposite-of-entry ≥ ~0.52) → buy opposite once (`ENABLE_LOSS_HEDGE`, default ON).
-  - [x] 3. Favorite (§6): whichever side is the market favorite (≥0.80) → top it up until a win there profits ≥ `favorite_min_profit_usd` (recovers a wrong entry).
-  - [x] 4. Insurance (§7): whichever side is ≤0.10 and we hold fewer → equalize.
-  - [x] Favorite/insurance act on the **market side (by price)**, not the entry side — fixes "enter DOWN but UP becomes the favorite".
-  - [x] Signal: momentum + neutral zone; header shows % basis. Per-market loss cap: none (by design).
+  - [x] 1. LOCK: equalize the deficit side when per-pair cost `(cost + equalize) / shares` ≤ `lock_sum` (0.90) → guaranteed ≥ $0.10/pair, mark DONE.
+  - [x] 2. STOP-LOSS: equalize when per-pair cost ≥ `stoploss_sum` (1.10) → bounded ~$0.10/pair loss (`ENABLE_LOSS_HEDGE`). HOLD in between (no losing leg — fixes the old hedge that locked a guaranteed loss).
+  - [x] 3. Favorite (§6): market favorite side (≥0.80) → top up until a win there profits ≥ `favorite_min_profit_usd`.
+  - [x] 4. Insurance (§7): market dying side (≤0.10), we hold fewer → equalize.
+  - [x] Every order sized via `floor_shares` / `enforce_floors` → never < 5 shares or < $1 (won't be rejected live).
+  - [x] Favorite/insurance act on the market side (by price). Signal: momentum + neutral zone; header shows % basis. Per-market loss cap: none.
 - [x] `scripts/sim_strategy.py` — offline path sim + favorite/insurance/lock checks (all pass).
 
 ## 7. Phase 4 — PnL, CSV, main loop (DRY_RUN)  ✅ done

@@ -79,8 +79,10 @@ class Config:
     insurance_threshold: float = 0.10
     price_tolerance: float = 0.01      # band around a target price for triggers
     favorite_min_profit_usd: float = 0.5  # favorite tops up the favored side until a win there profits >= this
-    lock_margin_usd: float = 0.0          # min guaranteed profit ($) to lock (min(up,down) shares > cost + this)
-    enable_loss_hedge: bool = True        # backup: buy the opposite when the entry goes adverse (>= ~0.52)
+    lock_margin_usd: float = 0.0          # reserved
+    enable_loss_hedge: bool = True        # allow the STOP-LOSS equalize (per-pair cost >= stoploss_sum)
+    lock_sum: float = 0.90                # equalize to LOCK profit when the per-pair cost <= this (0.58+0.32)
+    stoploss_sum: float = 1.10            # equalize to STOP-LOSS when the per-pair cost >= this (0.58+0.52)
 
     # --- sizing (Polymarket floors apply on top) ----------------------------
     base_notional_usd: float = 1.0  # "exchange minimum" base entry
@@ -138,6 +140,8 @@ class Config:
             favorite_min_profit_usd=_get_float("FAVORITE_MIN_PROFIT_USD", 0.5),
             lock_margin_usd=_get_float("LOCK_MARGIN_USD", 0.0),
             enable_loss_hedge=_get_bool("ENABLE_LOSS_HEDGE", True),
+            lock_sum=_get_float("LOCK_SUM", 0.90),
+            stoploss_sum=_get_float("STOPLOSS_SUM", 1.10),
             base_notional_usd=_get_float("BASE_NOTIONAL_USD", 1.0),
             min_shares=_get_int("MIN_SHARES", 5),
             min_notional_usd=_get_float("MIN_NOTIONAL_USD", 1.0),

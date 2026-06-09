@@ -1,64 +1,38 @@
 """Core BTC 5-minute lifecycle strategy (buy-only construction).
 
-Faithful to the STEP-2 spec (§4-§7) with the user's clarifications. Per tick, the
-first matching rule fires (one maker action/tick); the runner executes it, updates
-the position, and re-evaluates next tick.
+Hedging is governed by the PER-PAIR COST = (total_cost + equalize_cost) / shares,
+i.e. what we'd pay for a guaranteed $1 payout if we equalize both sides now. This
+is the (0.58, 0.32, 0.52) rule from the spec: enter at ~0.58, then
 
-  ENTRY (pure signal)   take the SIGNAL side at window open, any price.
-  1. PROFIT-LOCK (§5)   if buying the cheaper outcome makes min(up,down) shares >
-                        cost, buy it -> guaranteed-positive payoff, market DONE.
-  2. HEDGE / STOP-LOSS (§4)   the entry went against us: the OPPOSITE-of-entry rose
-                        to >= hedge_opposite_price (~0.52) -> buy it once to start
-                        the backup (config.enable_loss_hedge, default ON).
-  3. FAVORITE (§6)      whichever side is the market FAVORITE (>= favorite_threshold,
-                        ~0.80) -> top it up until a win on that side profits at
-                        least favorite_min_profit_usd (recovers a wrong entry).
-  4. INSURANCE (§7)     whichever side is almost dead (<= insurance_threshold,
-                        ~0.10) and we hold fewer of it than the other -> buy it to
-                        EQUALIZE both sides.
+  - LOCK      when per-pair cost <= lock_sum (0.90)   -> equalize the deficit side
+              for a GUARANTEED profit (>= $0.10 / pair), market DONE.
+  - STOP-LOSS when per-pair cost >= stoploss_sum (1.10) -> equalize to cap the loss
+              at a fixed ~$0.10 / pair (instead of risking the whole entry).
+  - HOLD      in between (0.90 < cost < 1.10): adding the opposite would only lock
+              a loss, so we wait. (This is why a "hedge" no longer bleeds.)
 
-Favorite/insurance act on the *market* side (by price), not a hard-coded UP — so
-they fire whether the favorite is our entry side or the opposite (the recovery
-case). Hedge uses the entry side to know which way is "adverse".
+Then the spec escalations on the MARKET side (by price, not entry side):
+  - FAVORITE  (>= favorite_threshold ~0.80): top up the favored side until a win
+              there profits >= favorite_min_profit_usd (recovers a wrong entry).
+  - INSURANCE (<= insurance_threshold ~0.10): equalize the almost-dead side.
+
+EVERY order is sized through floors so it is never under 5 shares or under $1 (the
+Polymarket minimums) — see order_manager.floor_shares / enforce_floors.
+
+One maker action per tick; the runner executes it and re-evaluates next tick.
 """
 
 from __future__ import annotations
 
 import math
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 from .config import Config
 from .logging_setup import get_logger
 from .models import Direction, MarketRef, OrderRequest, Position, Side
-from .order_manager import floor_shares
+from .order_manager import enforce_floors, floor_shares
 
 log = get_logger("strategy")
-
-
-def lock_buy(pos: Position, up_price: float, down_price: float, min_size: float,
-             margin: float) -> Optional[Tuple[Direction, float, float]]:
-    """If buying the deficit (fewer-shares) outcome can make
-    ``min(up,down) shares > cost + margin``, return (side, shares, price); else
-    None. We never buy a side that already has >= the other's shares (buying past
-    equalization only raises cost)."""
-    best: Optional[Tuple[Direction, float, float, float]] = None
-    for side, price, shares, other in (
-        (Direction.UP, up_price, pos.up_shares, pos.down_shares),
-        (Direction.DOWN, down_price, pos.down_shares, pos.up_shares),
-    ):
-        if price <= 0 or price >= 1 or other <= shares:
-            continue
-        need = (pos.total_cost + margin - shares) / (1.0 - price)
-        d = max(math.ceil(need + 1e-9), int(math.ceil(min_size)))
-        if shares + d > other:
-            continue
-        new_min = min(shares + d, other)
-        new_cost = pos.total_cost + d * price
-        if new_min > new_cost + margin:
-            profit = new_min - new_cost
-            if best is None or profit > best[3]:
-                best = (side, float(d), price, profit)
-    return None if best is None else (best[0], best[1], best[2])
 
 
 class Strategy:
@@ -77,14 +51,14 @@ class Strategy:
 
         price: Dict[Direction, float] = {Direction.UP: up_price, Direction.DOWN: down_price}
         has_pos = position.up_shares > 0 or position.down_shares > 0
+        min_size = max(market.min_order_size, cfg.min_shares)
 
         # ENTRY: pure signal, any price (one entry per window) -----------------
         if not has_pos:
             if signal not in (Direction.UP, Direction.DOWN):
                 return []
             if seconds_remaining <= cfg.entry_stop_buffer_sec:
-                log.debug("entry skipped: %.0fs left (< %.0fs buffer)",
-                          seconds_remaining, cfg.entry_stop_buffer_sec)
+                log.debug("entry skipped: %.0fs left", seconds_remaining)
                 return []
             p = price[signal]
             size = floor_shares(cfg.base_notional_usd, p, market.min_order_size,
@@ -92,48 +66,43 @@ class Strategy:
             log.debug("ENTRY signal=%s @ %.3f size=%.0f", signal.value, p, size)
             return [self._buy(market, signal, size, p, "entry")]
 
-        entry = position.entry_direction
-        if entry is None:
-            return []
-        opp = entry.opposite
-        cost = position.total_cost
+        up_sh, down_sh, cost = position.up_shares, position.down_shares, position.total_cost
 
-        # 1. PROFIT-LOCK (favorable) ------------------------------------------
-        lock = lock_buy(position, up_price, down_price, market.min_order_size,
-                        cfg.lock_margin_usd)
-        if lock is not None:
-            side, shares, p = lock
-            log.debug("LOCK-BUY %s %.0f @ %.3f (cost $%.2f -> guaranteed profit)",
-                      side.value, shares, p, cost)
-            return [self._buy(market, side, shares, p, "lock")]
+        # EQUALIZE the deficit side -> LOCK (cheap) or STOP-LOSS (expensive) ----
+        if up_sh != down_sh:
+            if up_sh > down_sh:
+                deficit, d_price, d_have, other = Direction.DOWN, down_price, down_sh, up_sh
+            else:
+                deficit, d_price, d_have, other = Direction.UP, up_price, up_sh, down_sh
+            d = enforce_floors(other - d_have, d_price, min_size, cfg.min_notional_usd)
+            new_min = min(other, d_have + d)
+            new_cost = cost + d * d_price
+            per_pair = (new_cost / new_min) if new_min > 0 else 99.0
+            if per_pair <= cfg.lock_sum:
+                log.debug("LOCK %s %.0f @ %.3f (per-pair $%.3f)", deficit.value, d, d_price, per_pair)
+                return [self._buy(market, deficit, d, d_price, "lock")]
+            if cfg.enable_loss_hedge and not position.hedged and per_pair >= cfg.stoploss_sum:
+                log.debug("STOPLOSS %s %.0f @ %.3f (per-pair $%.3f)", deficit.value, d, d_price, per_pair)
+                return [self._buy(market, deficit, d, d_price, "stoploss")]
+            # otherwise per-pair is in (lock_sum, stoploss_sum): HOLD (no losing leg)
 
-        # 2. HEDGE / STOP-LOSS (adverse): opposite-of-entry rose -> buy it once
-        if (cfg.enable_loss_hedge and not position.hedged
-                and price[opp] >= cfg.hedge_opposite_price - cfg.price_tolerance):
-            size = floor_shares(cfg.base_notional_usd, price[opp],
-                                market.min_order_size, cfg.min_notional_usd)
-            log.debug("HEDGE: opp %s @ %.3f -> buy %.0f", opp.value, price[opp], size)
-            return [self._buy(market, opp, size, price[opp], "hedge")]
-
-        # 3. FAVORITE: market favorite (>= threshold) -> ensure a win there profits
+        # FAVORITE: market favorite (>= threshold) -> ensure a win there profits
         fav = self._side_at_or_above(price, cfg.favorite_threshold)
         if fav is not None:
             p_fav, fav_sh = price[fav], position.shares(fav)
             if (fav_sh - cost) < cfg.favorite_min_profit_usd:
                 need = (cfg.favorite_min_profit_usd + cost - fav_sh) / max(1e-6, 1.0 - p_fav)
-                d = max(math.ceil(need + 1e-9), market.min_order_size)
-                log.debug("FAVORITE %s @ %.3f: profit-if-win %.2f < %.2f -> buy %.0f",
-                          fav.value, p_fav, fav_sh - cost, cfg.favorite_min_profit_usd, d)
+                d = enforce_floors(need, p_fav, min_size, cfg.min_notional_usd)
+                log.debug("FAVORITE %s %.0f @ %.3f", fav.value, d, p_fav)
                 return [self._buy(market, fav, d, p_fav, "favorite")]
 
-        # 4. INSURANCE: dying side (<= threshold), we hold fewer -> equalize ---
+        # INSURANCE: dying side (<= threshold), we hold fewer -> equalize -------
         weak = self._side_at_or_below(price, cfg.insurance_threshold)
         if weak is not None:
             weak_sh, other_sh = position.shares(weak), position.shares(weak.opposite)
             if weak_sh < other_sh:
-                d = max(other_sh - weak_sh, market.min_order_size)
-                log.debug("INSURANCE %s @ %.3f: %.0f < %.0f -> equalize buy %.0f",
-                          weak.value, price[weak], weak_sh, other_sh, d)
+                d = enforce_floors(other_sh - weak_sh, price[weak], min_size, cfg.min_notional_usd)
+                log.debug("INSURANCE %s %.0f @ %.3f", weak.value, d, price[weak])
                 return [self._buy(market, weak, d, price[weak], "insurance")]
 
         return []  # hold

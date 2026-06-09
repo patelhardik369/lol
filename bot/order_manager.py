@@ -43,6 +43,18 @@ def floor_shares(notional_usd: float, price: float, min_shares: float,
     return float(math.ceil(shares))
 
 
+def enforce_floors(target_shares: float, price: float, min_shares: float,
+                   min_notional_usd: float) -> float:
+    """Round a desired SHARE count up so it satisfies BOTH Polymarket floors
+    (>= min_shares AND >= $min_notional at `price`). Used for lock / stop-loss /
+    favorite / insurance sizing so no order is ever rejected live for being under
+    $1 or under 5 shares (e.g. 6 shares @ $0.08 = $0.48 -> bumped to 13 @ $1.04)."""
+    if price <= 0:
+        return float(max(target_shares, min_shares))
+    shares = max(target_shares, min_notional_usd / price, float(min_shares))
+    return float(math.ceil(shares))
+
+
 def round_to_tick(price: float, tick: float) -> float:
     if tick <= 0:
         return price
@@ -114,7 +126,13 @@ class OrderManager:
             log.warning("no maker price for %s %s (empty book) - skipping",
                         order.side.value, order.direction.value)
             return None
-        priced = dataclasses.replace(order, price=price)
+        # Floor the size at the ACTUAL maker (fill) price -- one tick below the ask
+        # the strategy sized against -- so the order is never under min_shares or
+        # under $min_notional and won't be rejected live (Polymarket minimums).
+        size = max(math.ceil(order.size), int(self.config.min_shares))
+        if price > 0:
+            size = max(size, math.ceil(self.config.min_notional_usd / price))
+        priced = dataclasses.replace(order, price=price, size=float(size))
 
         if dry_run or not self.config.is_live:
             self.client.place_limit_order_maker(priced, dry_run=True)  # logs the request
